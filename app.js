@@ -14,7 +14,10 @@ const STREAK_TO_LEARN = 3;
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
-const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false };
+const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
+const APP_VERSION = '2026-11-19';
+const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
+const GIST_FILE = 'french_trainer_sync.json';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -104,7 +107,7 @@ function checkAnswer(userText, card) {
 function cardDefaults(c) {
   return Object.assign({
     id: uid(), alt: [], note: '', topic: '', status: NEW, created: todayIso(), last_practiced: null,
-    next_session: 0, interval: IV.NEW, streak: 0, history: [], source: 'seed',
+    next_session: 0, interval: IV.NEW, streak: 0, history: [], source: 'seed', updated: 0,
   }, c);
 }
 function normalizeState(raw) {
@@ -116,6 +119,7 @@ function normalizeState(raw) {
     fixes: Array.isArray(raw.fixes) ? raw.fixes : [],
     settings: Object.assign({}, DEFAULT_SETTINGS, raw.settings || {}),
     defis: raw.defis && typeof raw.defis === 'object' ? raw.defis : {},
+    deleted: raw.deleted && typeof raw.deleted === 'object' ? raw.deleted : {},
   };
 }
 function initialState() { return normalizeState({ session_count: 0, cards: clone(window.SEED_CARDS || []), packs: ['base'] }); }
@@ -154,27 +158,29 @@ function loadState() {
 let state = loadState();
 const packsAdded = applyPacks(state);
 applyFixes(state);
-function save() {
+function save(fromSync = false) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (e) { console.error(e); toast('⚠️ No se pudo guardar (almacenamiento lleno)'); }
+  if (!fromSync) schedulePush();
 }
-save();
+const touch = c => { c.updated = Date.now(); return c; };
+save(true);
 
 const getCard = id => state.cards.find(c => c.id === id);
 const exists = fr => { const n = normalize(fr); return state.cards.some(c => normalize(c.fr) === n); };
 function addCard({ es, fr, note = '', topic = '', alt = [], source = 'manual' }) {
   const card = cardDefaults({ es: es.trim(), fr: fr.trim(), note: (note || '').trim(), topic: (topic || '').trim(), alt: [...alt], source });
   card.next_session = state.session_count ? state.session_count + 1 : 0;
-  state.cards.push(card); save(); return card;
+  touch(card); state.cards.push(card); save(); return card;
 }
-function deleteCard(id) { state.cards = state.cards.filter(c => c.id !== id); save(); }
+function deleteCard(id) { state.cards = state.cards.filter(c => c.id !== id); state.deleted[id] = Date.now(); save(); }
 function setStatus(id, status) {
   const c = getCard(id); if (!c) return;
   c.status = status;
   if (status === DIFF) { c.interval = IV.DIFF_WRONG; c.streak = 0; }
   else if (status === LEARNED) c.interval = Math.max(c.interval || 0, IV.LEARNED_BASE);
   else { c.interval = IV.NEW; c.streak = 0; }
-  c.next_session = state.session_count + c.interval; save();
+  c.next_session = state.session_count + c.interval; touch(c); save();
 }
 const dueCards = (session = state.session_count) => state.cards.filter(c => c.next_session <= session);
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
@@ -214,7 +220,7 @@ function recordAnswer(id, correct) {
     if (c.status === DIFF) c.interval = IV.DIFF_WRONG;
     else { c.status = NEW; c.interval = IV.NEW; }
   }
-  c.next_session = state.session_count + c.interval; save();
+  c.next_session = state.session_count + c.interval; touch(c); save();
 }
 function restoreCard(snap) { const i = state.cards.findIndex(c => c.id === snap.id); if (i >= 0) { state.cards[i] = clone(snap); save(); } }
 function stats() {
@@ -324,7 +330,7 @@ function openEditor(id, onDone) {
     const es = $('#e-es', m).value.trim(), fr = $('#e-fr', m).value.trim();
     if (!es || !fr) return toast('Español y francés son obligatorios');
     Object.assign(c, { es, fr, note: $('#e-note', m).value.trim(), topic: $('#e-topic', m).value.trim(),
-      alt: $('#e-alt', m).value.split(';').map(s => s.trim()).filter(Boolean), edited: true });
+      alt: $('#e-alt', m).value.split(';').map(s => s.trim()).filter(Boolean), edited: true, updated: Date.now() });
     save(); close(); toast('Tarjeta guardada'); onDone && onDone();
   };
   setTimeout(() => $('#e-fr', m).focus(), 50);
@@ -442,6 +448,7 @@ function renderSummary(v) {
       <div class="row center"><button class="btn btn-grad" id="home">🏠 Volver al inicio</button><span class="kbd">Enter</span></div>
     </div>`;
   $('#home', v).onclick = backHome;
+  syncNow(true); // session finished: good moment to sync
 }
 function backHome() { P.running = false; P.queue = []; saveSession(); RENDER.practice(); }
 
@@ -541,7 +548,7 @@ function overrideCorrect() {
   const card = currentCard(); if (!card || !P.snapshot || P.verdict === 'correct') return;
   restoreCard(P.snapshot); recordAnswer(card.id, true);
   const c = getCard(card.id), user = (P.lastInput || '').trim();
-  if (user && ![c.fr, ...c.alt].some(a => normalize(a) === normalize(user))) { c.alt.push(user); save(); }
+  if (user && ![c.fr, ...c.alt].some(a => normalize(a) === normalize(user))) { c.alt.push(user); touch(c); save(); }
   P.ok++; P.ko--; bumpStreak(true); P.verdict = 'correct'; saveSession(); updateScore();
   showFeedback(c, { verdict: 'correct', matched: c.fr }, true);
   $('#answer')?.focus({ preventScroll: true });
@@ -829,6 +836,7 @@ RENDER.data = function renderData() {
         <div class="row"><button class="btn btn-soft" id="test-voice">🔊 Probar voz</button><span class="muted small">${frVoice ? `Voz: ${esc(frVoice.name)}` : 'Si no oyes nada, instala una voz francesa en los ajustes del sistema.'}</span></div>`
         : '<div class="muted small">Este navegador no permite leer en voz alta.</div>'}
     </div>
+    ${syncCardHtml()}
     <div class="card col" style="margin-top:14px">
       <div style="font-size:1.4rem;font-weight:800">💾 Tus datos</div>
       <div class="muted">Las tarjetas y el progreso se guardan solo en este dispositivo (${state.cards.length} tarjetas, ${kb} KB).
@@ -843,16 +851,25 @@ RENDER.data = function renderData() {
       <div style="font-weight:800">Empezar de cero</div>
       <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes y los días 12–21).</div>
       <div><button class="btn btn-diff" id="reset">Restablecer</button></div>
+    </div>
+    <div class="card col" style="margin-top:14px">
+      <div class="row between"><b>Versión ${APP_VERSION}</b><button class="btn btn-soft small" id="check-update">🔄 Buscar actualización</button></div>
+      <div class="muted small">Si has subido archivos nuevos a GitHub y no ves los cambios, pulsa aquí.</div>
     </div>`;
-  $('#goal-seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; st.dailyGoal = +b.dataset.g; save(); RENDER.data(); };
-  if ($('#auto-speak')) $('#auto-speak').onchange = e => { st.autoSpeak = e.target.checked; save(); };
+  $('#goal-seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; st.dailyGoal = +b.dataset.g; st.updated = Date.now(); save(); RENDER.data(); };
+  if ($('#auto-speak')) $('#auto-speak').onchange = e => { st.autoSpeak = e.target.checked; st.updated = Date.now(); save(); };
+  bindSyncUi();
   if ($('#test-voice')) $('#test-voice').onclick = () => speak('Bonjour ! On est dans les temps.');
   $('#export').onclick = exportData;
   $('#imp-json').onchange = importData;
+  $('#check-update').onclick = forceUpdate;
   $('#reset').onclick = () => {
     if (!confirm('¿Seguro? Se perderá todo el progreso de este dispositivo.')) return;
     const settings = state.settings;
-    state = initialState(); applyPacks(state); applyFixes(state); state.settings = settings; save(); backHomeSilent(); toast('Mazo restablecido'); RENDER.data();
+    const old = state.cards.map(c => c.id), now = Date.now();
+    state = initialState(); applyPacks(state); applyFixes(state); state.settings = settings;
+    state.cards.forEach(c => { c.updated = now; }); old.forEach(id => { if (!state.cards.some(c => c.id === id)) state.deleted[id] = now; });
+    save(); backHomeSilent(); toast('Mazo restablecido'); RENDER.data();
   };
 };
 function backHomeSilent() { P.running = false; P.queue = []; saveSession(); }
@@ -874,13 +891,165 @@ async function importData(e) {
     if (!next.cards.length) return toast('El archivo no contiene tarjetas');
     if (!confirm(`Se sustituirán tus ${state.cards.length} tarjetas por las ${next.cards.length} del archivo. ¿Continuar?`)) return;
     const extra = applyPacks(next); applyFixes(next);
+    const now = Date.now(); next.cards.forEach(c => { c.updated = now; }); state.cards.forEach(c => { if (!next.cards.some(n => n.id === c.id)) next.deleted[c.id] = now; });
     state = next; save(); backHomeSilent(); toast(`Progreso importado${extra ? ` (+${extra} tarjetas nuevas)` : ''}`); RENDER.data();
   } catch (err) { console.error(err); toast('Archivo no válido'); }
+}
+
+
+// ------------------------------------------------------------------ SYNC (private GitHub Gist, free)
+const SY = Object.assign({ token: '', gistId: '', last: 0 }, (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch { return {}; } })());
+const saveSync = () => localStorage.setItem(SYNC_KEY, JSON.stringify(SY));
+let syncBusy = false, syncTimer = null, syncError = '';
+function schedulePush() { if (!SY.token) return; clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(true), 8000); }
+async function gh(path, opts = {}) {
+  const res = await fetch(`https://api.github.com${path}`, Object.assign({}, opts, {
+    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${SY.token}`, 'Content-Type': 'application/json' },
+  }));
+  if (res.status === 401) throw new Error('El token no es válido o ha caducado.');
+  if (!res.ok) { const e = new Error(`GitHub respondió ${res.status}`); e.status = res.status; throw e; }
+  return res.json();
+}
+async function readGist(g) {
+  const f = g.files && g.files[GIST_FILE]; if (!f) return null;
+  const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+  return text ? JSON.parse(text) : null;
+}
+async function findOrCreateGist() {
+  const list = await gh('/gists?per_page=100');
+  const found = list.find(g => g.files && g.files[GIST_FILE]);
+  if (found) { SY.gistId = found.id; saveSync(); return readGist(await gh(`/gists/${found.id}`)); }
+  const created = await gh('/gists', { method: 'POST', body: JSON.stringify({ description: 'French Trainer · progreso (no borrar)', public: false,
+    files: { [GIST_FILE]: { content: JSON.stringify(state) } } }) });
+  SY.gistId = created.id; saveSync(); return null;
+}
+function mergeHistory(a = [], b = []) {
+  const seen = new Set(), out = [];
+  [...a, ...b].forEach(h => { const k = `${h.date}|${h.session}|${h.correct}`; if (!seen.has(k)) { seen.add(k); out.push(h); } });
+  return out.sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+}
+function mergeStates(local, remote) {
+  const byId = new Map(remote.cards.map(c => [c.id, c]));
+  for (const c of local.cards) {
+    const r = byId.get(c.id);
+    if (!r) { byId.set(c.id, c); continue; }
+    const win = clone((c.updated || 0) >= (r.updated || 0) ? c : r);
+    win.history = mergeHistory(c.history, r.history); byId.set(c.id, win);
+  }
+  const deleted = Object.assign({}, remote.deleted);
+  for (const [k, t] of Object.entries(local.deleted)) deleted[k] = Math.max(deleted[k] || 0, t);
+  let cards = [...byId.values()].filter(c => !(deleted[c.id] >= (c.updated || 0)));
+  const byKey = new Map(); // same phrase with different ids (e.g. imported on one device): keep the most practised
+  for (const c of cards) {
+    const k = normalize(c.es) + '|' + normalize(c.fr), o = byKey.get(k);
+    if (!o || c.history.length > o.history.length || (c.history.length === o.history.length && (c.updated || 0) > (o.updated || 0))) byKey.set(k, c);
+  }
+  cards = [...byKey.values()];
+  const defis = {};
+  for (const src of [local.defis, remote.defis]) for (const [day, list] of Object.entries(src)) {
+    const count = l => l.reduce((m, d) => (m[d] = (m[d] || 0) + 1, m), {});
+    const a = count(defis[day] || []), b = count(list); const merged = [];
+    new Set([...Object.keys(a), ...Object.keys(b)]).forEach(d => { for (let i = 0; i < Math.max(a[d] || 0, b[d] || 0); i++) merged.push(d); });
+    defis[day] = merged.sort();
+  }
+  return {
+    version: 1, cards, deleted, defis,
+    session_count: Math.max(local.session_count, remote.session_count),
+    packs: [...new Set([...local.packs, ...remote.packs])],
+    fixes: [...new Set([...local.fixes, ...remote.fixes])],
+    settings: (local.settings.updated || 0) >= (remote.settings.updated || 0) ? local.settings : remote.settings,
+  };
+}
+async function syncNow(silent = false) {
+  if (!SY.token || syncBusy || !navigator.onLine) return;
+  syncBusy = true; clearTimeout(syncTimer); updateSyncStatus('Sincronizando…');
+  try {
+    let remote = null;
+    if (SY.gistId) {
+      try { remote = await readGist(await gh(`/gists/${SY.gistId}`)); }
+      catch (e) { if (e.status === 404) { SY.gistId = ''; remote = await findOrCreateGist(); } else throw e; }
+    } else remote = await findOrCreateGist();
+    if (remote) {
+      const before = JSON.stringify(state.cards.length) + state.session_count;
+      state = mergeStates(state, normalizeState(remote)); applyPacks(state); applyFixes(state); save(true);
+      if (!silent || before !== JSON.stringify(state.cards.length) + state.session_count) refreshView();
+    }
+    await gh(`/gists/${SY.gistId}`, { method: 'PATCH', body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(state) } } }) });
+    SY.last = Date.now(); saveSync(); syncError = '';
+    if (!silent) toast('☁️ Sincronizado');
+  } catch (e) {
+    console.error(e); syncError = e.message || 'Error de red';
+    if (!silent) toast(`⚠️ No se pudo sincronizar: ${syncError}`);
+  } finally { syncBusy = false; updateSyncStatus(); }
+}
+function refreshView() {
+  if (activeTab === 'practice' && P.running) { updateHeader(); return; } // never interrupt a session
+  if (!document.querySelector('.modal')) RENDER[activeTab]();
+}
+function syncStatusText() {
+  if (!SY.token) return 'No conectado';
+  if (syncError) return `⚠️ ${syncError}`;
+  if (!SY.last) return 'Conectado · aún sin sincronizar';
+  const d = new Date(SY.last);
+  return `Última sincronización: ${formatDate(isoOf(d))}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function updateSyncStatus(text) { const el = $('#sync-status'); if (el) el.textContent = text || syncStatusText(); }
+function syncCardHtml() {
+  if (!SY.token) return `
+    <div class="card col" style="margin-top:14px">
+      <div style="font-size:1.4rem;font-weight:800">☁️ Sincronizar entre dispositivos</div>
+      <div class="muted small">Guarda tu progreso en un Gist privado de tu cuenta de GitHub y lo comparte entre el móvil y el ordenador. Se hace una vez en cada dispositivo:</div>
+      <ol class="steps">
+        <li>Abre <a href="https://github.com/settings/tokens/new?scopes=gist&description=French%20Trainer" target="_blank" rel="noopener">este enlace</a> (crear token en GitHub; inicia sesión si te lo pide).</li>
+        <li>Deja marcado <b>solo</b> «gist», elige la caducidad (p. ej. 1 año) y pulsa <b>Generate token</b>.</li>
+        <li>Copia el token (empieza por <code>ghp_</code>) y pégalo aquí. Usa el mismo token en todos tus dispositivos.</li>
+      </ol>
+      <input class="field" id="sync-token" type="password" placeholder="ghp_…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div><button class="btn btn-grad" id="sync-connect">Conectar</button></div>
+      <div class="muted small">El token se guarda solo en este dispositivo y no se incluye al exportar.</div>
+    </div>`;
+  return `
+    <div class="card col" style="margin-top:14px">
+      <div style="font-size:1.4rem;font-weight:800">☁️ Sincronización activada</div>
+      <div class="muted small" id="sync-status">${esc(syncStatusText())}</div>
+      <div class="muted small">Se sincroniza al abrir la app, al terminar cada sesión y unos segundos después de cada cambio.</div>
+      <div class="row"><button class="btn btn-grad" id="sync-now">🔄 Sincronizar ahora</button><button class="btn btn-ghost" id="sync-off">Desconectar</button></div>
+    </div>`;
+}
+function bindSyncUi() {
+  const c = $('#sync-connect');
+  if (c) c.onclick = async () => {
+    const t = $('#sync-token').value.trim(); if (!t) return toast('Pega primero el token');
+    SY.token = t; SY.gistId = ''; SY.last = 0; saveSync(); c.disabled = true; c.textContent = 'Conectando…';
+    await syncNow(false);
+    if (syncError) { SY.token = ''; saveSync(); }
+    RENDER.data();
+  };
+  const n = $('#sync-now'); if (n) n.onclick = () => syncNow(false);
+  const o = $('#sync-off'); if (o) o.onclick = () => {
+    if (!confirm('¿Desconectar la sincronización en este dispositivo? Tu progreso local y el de GitHub se conservan.')) return;
+    Object.assign(SY, { token: '', gistId: '', last: 0 }); saveSync(); syncError = ''; RENDER.data();
+  };
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && SY.token && Date.now() - SY.last > 60000) syncNow(true);
+  if (document.visibilityState === 'hidden' && syncTimer) syncNow(true);
+});
+window.addEventListener('online', () => syncNow(true));
+
+async function forceUpdate() {
+  toast('Buscando actualización…');
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration(); if (reg) await reg.update();
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+  } catch (e) { console.error(e); }
+  setTimeout(() => location.reload(), 600);
 }
 
 // ------------------------------------------------------------------ boot
 showTab('practice');
 if (packsAdded) setTimeout(() => toast(`✨ ${packsAdded} tarjetas nuevas añadidas`), 400);
+setTimeout(() => syncNow(true), 800);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
 }
