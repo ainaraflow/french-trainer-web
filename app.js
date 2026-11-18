@@ -15,7 +15,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-19';
+const APP_VERSION = '2026-11-20';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -101,6 +101,33 @@ function checkAnswer(userText, card) {
   let best = card.fr, bestR = 0;
   for (const a of answers) { const r = similarity(u, normalize(a)); if (r > bestR) { bestR = r; best = a; } }
   return bestR >= 0.88 ? { verdict: 'close', matched: best } : { verdict: 'wrong', matched: card.fr };
+}
+
+/* Easy mode: one box per letter, ~30 % of letters revealed (stable per card), punctuation always shown. */
+function hintHtml(text, seed) {
+  let x = crc32(seed) || 1;
+  const rnd = () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) / 4294967296; };
+  return text.split(/\s+/).filter(Boolean).map(word => {
+    const chars = [...word], letters = chars.map((ch, i) => /\p{L}/u.test(ch) ? i : -1).filter(i => i >= 0);
+    const n = letters.length <= 2 ? 0 : Math.min(letters.length - 1, Math.max(1, Math.round(letters.length * 0.3)));
+    const shown = new Set();
+    while (shown.size < n) shown.add(letters[Math.floor(rnd() * letters.length)]);
+    return `<span class="hw">${chars.map((ch, i) => /\p{L}/u.test(ch)
+      ? `<span class="hl${shown.has(i) ? ' on' : ''}">${shown.has(i) ? esc(ch) : ''}</span>`
+      : `<span class="hp">${esc(ch)}</span>`).join('')}</span>`;
+  }).join('');
+}
+/* Highlights the letters that differ when both strings have the same shape (e.g. è vs é). */
+function diffPair(user, target) {
+  const u = [...user.trim().normalize('NFC')], t = [...target.trim().normalize('NFC')];
+  if (u.length !== t.length) return null;
+  let diffs = 0;
+  const mark = (arr, other, cls) => arr.map((ch, i) => {
+    const d = ch.toLowerCase() !== other[i].toLowerCase(); if (d && cls === 'ok') diffs++;
+    return d ? `<mark class="${cls}">${esc(ch)}</mark>` : esc(ch);
+  }).join('');
+  const target_ = mark(t, u, 'ok'), user_ = mark(u, t, 'ko');
+  return diffs && diffs <= 4 ? { user: user_, target: target_ } : null;
 }
 
 // ------------------------------------------------------------------ deck (same model as the desktop app)
@@ -205,11 +232,14 @@ function startSession(opts) {
   else if (opts.mode === 'topics') pool.sort((a, b) => (a.next_session <= state.session_count ? 0 : 1) - (b.next_session <= state.session_count ? 0 : 1));
   save(); return pool.slice(0, opts.size).map(c => c.id);
 }
-function recordAnswer(id, correct) {
+function recordAnswer(id, result) {
   const c = getCard(id); if (!c) return;
-  c.history.push({ date: todayIso(), session: state.session_count, correct: !!correct });
+  const correct = result === true, almost = result === 'almost';
+  c.history.push(Object.assign({ date: todayIso(), session: state.session_count, correct }, almost ? { almost: true } : {}));
   c.last_practiced = todayIso();
-  if (correct) {
+  if (almost) {               // keeps status and streak, but comes back soon to fix the detail
+    c.interval = c.status === DIFF ? IV.DIFF_WRONG : IV.NEW;
+  } else if (correct) {
     c.streak += 1;
     if (c.status === DIFF) c.interval = IV.DIFF_RIGHT;
     else if (c.status === LEARNED) c.interval = Math.min(IV.MAX, Math.max(IV.LEARNED_BASE, Math.round(c.interval * IV.GROWTH)));
@@ -353,7 +383,7 @@ const statTile = (label, num, color) =>
 
 // ------------------------------------------------------------------ PRACTICE
 const P = Object.assign({ running: false, queue: [], idx: 0, answered: false, snapshot: null, verdict: null,
-  ok: 0, ko: 0, size: 20, streak: 0, best: 0, lastInput: '', mode: 'smart', topics: [], onlyDiff: false }, (() => {
+  ok: 0, ko: 0, almost: 0, size: 20, streak: 0, best: 0, lastInput: '', mode: 'smart', topics: [], onlyDiff: false, level: 'hard' }, (() => {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY)) || {}; } catch { return {}; }
 })());
 const saveSession = () => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(P)); } catch {} };
@@ -394,6 +424,8 @@ function renderStart(v) {
       <div class="seg" id="mode-seg">${modeBtn('smart', '🧠 Repaso')}${modeBtn('random', '🎲 Aleatorio')}${modeBtn('topics', '🏷️ Temas')}</div>
       <div class="muted small" style="margin-top:-6px">${{ smart: 'Las tarjetas que tocan hoy según tu progreso.', random: 'Tarjetas al azar de todo el mazo.', topics: 'Solo los temas que elijas (primero las que tocan hoy).' }[P.mode]}</div>
       ${P.mode === 'topics' ? topicPickerHtml() : ''}
+      <div class="seg" id="level-seg"><button data-level="easy" class="${P.level === 'easy' ? 'on' : ''}">😊 Fácil</button><button data-level="hard" class="${P.level !== 'easy' ? 'on' : ''}">💪 Difícil</button></div>
+      <div class="muted small" style="margin-top:-6px">${P.level === 'easy' ? 'Verás huecos con el número de letras de cada palabra y algunas letras de pista.' : 'Sin pistas: escribes la respuesta completa.'}</div>
       <label class="check"><input type="checkbox" id="only-diff" ${P.onlyDiff ? 'checked' : ''}> Solo las difíciles</label>
       <div class="seg" id="size-seg">${[10, 20, 30, 50].map(n => `<button data-size="${n}" class="${P.size === n ? 'on' : ''}">${n}</button>`).join('')}</div>
       <div class="muted small" style="margin-top:-8px">tarjetas por sesión · ${available} disponibles</div>
@@ -406,6 +438,7 @@ function renderStart(v) {
   $('#mode-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.mode = b.dataset.mode; saveSession(); renderStart(v); };
   $('#size-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.size = +b.dataset.size; saveSession(); renderStart(v); };
   $('#only-diff', v).onchange = e => { P.onlyDiff = e.target.checked; saveSession(); renderStart(v); };
+  $('#level-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.level = b.dataset.level; saveSession(); renderStart(v); };
   if ($('#start', v)) $('#start', v).onclick = () => start(false);
   if ($('#review', v)) $('#review', v).onclick = () => start(true);
   const picker = $('#topic-picker', v);
@@ -432,18 +465,18 @@ function topicPickerHtml() {
 }
 function start(reviewAnyway) {
   const queue = startSession({ mode: P.mode, topics: P.topics, onlyDiff: P.onlyDiff, size: P.size, reviewAnyway });
-  Object.assign(P, { queue, idx: 0, ok: 0, ko: 0, running: true, answered: false, snapshot: null, verdict: null, streak: 0, best: 0, lastInput: '' });
+  Object.assign(P, { queue, idx: 0, ok: 0, ko: 0, almost: 0, running: true, answered: false, snapshot: null, verdict: null, streak: 0, best: 0, lastInput: '' });
   saveSession(); RENDER.practice();
 }
 function renderSummary(v) {
-  const total = P.ok + P.ko, pct = total ? Math.round(100 * P.ok / total) : 0;
+  const total = P.ok + P.ko + P.almost, pct = total ? Math.round(100 * (P.ok + P.almost / 2) / total) : 0;
   const msg = pct >= 90 ? '¡Increíble!' : pct >= 70 ? '¡Muy bien!' : pct >= 40 ? '¡Sigue así!' : 'Cada sesión cuenta';
   v.innerHTML = `
     <div class="card col anim-pop" style="align-items:center;text-align:center">
       <div style="font-size:3rem">🏆</div>
       <div style="font-size:1.8rem;font-weight:800">${msg}</div>
       <div class="ring" style="background:conic-gradient(var(--ok) ${pct * 3.6}deg, #ece9f8 0)"><div>${pct}%</div></div>
-      <div class="stats">${statTile('Correctas', P.ok, '#1fb37a')}${statTile('Incorrectas', P.ko, '#f0506e')}${statTile('Mejor racha', P.best, '#ff9a4d')}</div>
+      <div class="stats">${statTile('Correctas', P.ok, '#1fb37a')}${P.almost ? statTile('Casi', P.almost, '#e5a00d') : ''}${statTile('Incorrectas', P.ko, '#f0506e')}${statTile('Mejor racha', P.best, '#ff9a4d')}</div>
       ${streakBlock()}
       <div class="row center"><button class="btn btn-grad" id="home">🏠 Volver al inicio</button><span class="kbd">Enter</span></div>
     </div>`;
@@ -457,17 +490,23 @@ function renderCard(v, card) {
   v.innerHTML = `
     <div class="row between">
       <span class="row"><span class="pill">Tarjeta ${n} de ${total}</span><button class="btn btn-ghost small" id="quit">✕ Salir</button></span>
-      <span class="row"><span class="streak ${P.streak >= 2 ? '' : 'hidden'}" id="streak">🔥 ${P.streak}</span><span class="pill" id="score">✓ ${P.ok} &nbsp; ✗ ${P.ko}</span></span>
+      <span class="row"><span class="streak ${P.streak >= 2 ? '' : 'hidden'}" id="streak">🔥 ${P.streak}</span><span class="pill" id="score">${scoreText()}</span></span>
     </div>
     <div class="progress"><div style="width:${(100 * (n - 1) / total).toFixed(1)}%"></div></div>
     <div class="card anim-in" style="border-top:8px solid ${bg}">
       <div class="row between">${topicChip(card.topic) || '<span></span>'}<span id="status-chip">${statusChip(card.status)}</span></div>
       <div class="prompt">${esc(card.es)}</div>
+      <div class="row between" style="margin:-2px 0 8px">
+        <div class="hint ${P.level === 'easy' ? '' : 'hidden'}" id="hint">${hintHtml(card.fr, card.id + card.fr)}</div>
+        <button class="btn btn-ghost small" id="lvl">${P.level === 'easy' ? '💪 Quitar pistas' : '💡 Pistas'}</button>
+      </div>
       <input id="answer" class="answer" placeholder="Escribe la traducción en francés…" autocomplete="off" autocorrect="off"
              autocapitalize="off" spellcheck="false" enterkeyhint="done" lang="fr">
       <div id="feedback"></div>
       <div id="actions" class="row between actions"></div>
     </div>`;
+  $('#lvl', v).onclick = () => { P.level = P.level === 'easy' ? 'hard' : 'easy'; saveSession();
+    $('#hint').classList.toggle('hidden', P.level !== 'easy'); $('#lvl').textContent = P.level === 'easy' ? '💪 Quitar pistas' : '💡 Pistas'; $('#answer').focus(); };
   $('#quit', v).onclick = () => { if (confirm('¿Terminar la sesión ahora? Lo que has respondido ya está guardado.')) backHome(); };
   const inp = $('#answer', v);
   inp.addEventListener('keydown', e => {
@@ -501,15 +540,16 @@ function bumpStreak(correct) {
   if ([5, 10, 20, 30].includes(P.streak)) toast(`🔥 ¡${P.streak} seguidas!`);
   const s = $('#streak'); if (s) { s.textContent = `🔥 ${P.streak}`; s.classList.toggle('hidden', P.streak < 2); }
 }
-function updateScore() { const s = $('#score'); if (s) s.innerHTML = `✓ ${P.ok} &nbsp; ✗ ${P.ko}`; }
+const scoreText = () => `✓ ${P.ok}${P.almost ? ` &nbsp; ≈ ${P.almost}` : ''} &nbsp; ✗ ${P.ko}`;
+function updateScore() { const s = $('#score'); if (s) s.innerHTML = scoreText(); }
 function check() {
   const card = currentCard(), inp = $('#answer'); if (!card || P.answered || !inp) return;
   const text = inp.value || '';
   if (!text.trim()) { toast('Escribe una respuesta primero'); inp.focus(); return; }
   const before = streakInfo().today;
-  const res = checkAnswer(text, card), correct = res.verdict === 'correct';
-  P.snapshot = clone(card); recordAnswer(card.id, correct);
-  correct ? P.ok++ : P.ko++; bumpStreak(correct);
+  const res = checkAnswer(text, card), correct = res.verdict === 'correct', almost = res.verdict === 'accents' || res.verdict === 'close';
+  P.snapshot = clone(card); recordAnswer(card.id, correct ? true : almost ? 'almost' : false);
+  if (correct) { P.ok++; bumpStreak(true); } else if (almost) P.almost++; else { P.ko++; bumpStreak(false); }
   Object.assign(P, { answered: true, verdict: res.verdict, lastInput: text }); saveSession();
   inp.readOnly = true; updateScore(); updateHeader();
   const goal = state.settings.dailyGoal;
@@ -521,8 +561,8 @@ function check() {
 function showFeedback(card, res, overridden = false, quiet = false) {
   const map = {
     correct: ['fb-ok', overridden ? 'Contada como correcta' : '🎉 ¡Correcto!', 'anim-pop'],
-    accents: ['fb-warn', '✏️ Casi: revisa los acentos', 'anim-shake'],
-    close: ['fb-warn', '🤏 Casi: hay una pequeña diferencia', 'anim-shake'],
+    accents: ['fb-warn', '🟡 ¡Casi! Solo falla una tilde', 'anim-pop'],
+    close: ['fb-warn', '🟡 ¡Casi! Hay una pequeña diferencia', 'anim-pop'],
     wrong: ['fb-ko', '😕 No es correcto', 'anim-shake'],
   };
   const [cls, title, anim] = map[res.verdict] || map.wrong;
@@ -531,7 +571,11 @@ function showFeedback(card, res, overridden = false, quiet = false) {
   $('#feedback').innerHTML = `
     <div class="fb ${cls} ${quiet ? '' : anim}">
       <div class="row between"><div class="t">${title}</div>${speakBtn(sayText, 'icon-btn icon-light')}</div>
-      <div class="a">${esc(card.fr)}</div>
+      ${(() => {
+        const dp = res.verdict !== 'correct' && P.lastInput ? diffPair(P.lastInput, res.matched || card.fr) : null;
+        return dp ? `<div class="a">${dp.target}</div><div class="small" style="margin-top:4px">Tu respuesta: <span class="yours">${dp.user}</span></div>`
+                  : `<div class="a">${esc(card.fr)}</div>${res.verdict !== 'correct' && P.lastInput ? `<div class="small" style="margin-top:4px;opacity:.85">Tu respuesta: <span class="yours">${esc(P.lastInput)}</span></div>` : ''}`;
+      })()}
       ${others.length ? `<div class="small" style="opacity:.8;margin-top:4px">También válido: ${others.map(esc).join(' · ')}</div>` : ''}
       <div class="row" style="margin-top:6px;gap:4px">
         ${res.verdict !== 'correct' ? `<button class="btn btn-ghost" id="override" style="padding-left:0">👍 Mi respuesta era válida</button>` : ''}
@@ -549,7 +593,8 @@ function overrideCorrect() {
   restoreCard(P.snapshot); recordAnswer(card.id, true);
   const c = getCard(card.id), user = (P.lastInput || '').trim();
   if (user && ![c.fr, ...c.alt].some(a => normalize(a) === normalize(user))) { c.alt.push(user); touch(c); save(); }
-  P.ok++; P.ko--; bumpStreak(true); P.verdict = 'correct'; saveSession(); updateScore();
+  if (P.verdict === 'accents' || P.verdict === 'close') P.almost--; else P.ko--;
+  P.ok++; bumpStreak(true); P.verdict = 'correct'; saveSession(); updateScore();
   showFeedback(c, { verdict: 'correct', matched: c.fr }, true);
   $('#answer')?.focus({ preventScroll: true });
 }

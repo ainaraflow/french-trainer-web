@@ -196,5 +196,16 @@ hr.sep { border: 0; border-top: 1px solid #eee; width: 100%; }
 .steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: .9rem; }
 .steps a { color: var(--primary); font-weight: 700; }
 
+/* easy-mode hint + diff marks */
+.hint { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 6px 0; }
+.hw { display: inline-flex; gap: 3px; align-items: flex-end; }
+.hl { width: 1.05em; height: 1.45em; border-bottom: 3px solid #c9c2f5; display: inline-grid; place-items: center; font-weight: 800; color: var(--primary); font-size: 1.05rem; }
+.hl.on { border-bottom-color: var(--primary); }
+.hp { font-weight: 800; color: var(--muted); font-size: 1.05rem; padding-bottom: 2px; }
+mark.ok { background: #c7f0dc; color: #0d5c3d; border-radius: 4px; padding: 0 1px; }
+mark.ko { background: #ffd2da; color: #8a1c33; border-radius: 4px; padding: 0 1px; }
+.fb-warn mark.ok { background: #ffe7a3; color: #6b4a00; }
+.yours { font-weight: 700; }
+
 /* small phones */
 @media (max-width: 480px) { .title { font-size: 1.25rem; } .pill { font-size: .72rem; padding: 5px 10px; } }
