@@ -1,5 +1,5 @@
 // Offline cache: serve from cache instantly, refresh it in the background.
-const CACHE = 'ft-v1';
+const CACHE = 'ft-v3';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './data.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
