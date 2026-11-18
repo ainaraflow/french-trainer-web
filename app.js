@@ -15,7 +15,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-21';
+const APP_VERSION = '2026-11-23';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -64,11 +64,12 @@ function pickVoice() {
   frVoice = vs.find(v => /^fr[-_]FR/i.test(v.lang)) || vs.find(v => /^fr/i.test(v.lang)) || null;
 }
 if (canSpeak) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
-function speak(text) {
+function speak(text, rate = 0.92, onend) {
   if (!canSpeak || !text) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/…/g, '').replace(/____/g, ' '));
-  u.lang = frVoice ? frVoice.lang : 'fr-FR'; if (frVoice) u.voice = frVoice; u.rate = 0.92;
+  u.lang = frVoice ? frVoice.lang : 'fr-FR'; if (frVoice) u.voice = frVoice; u.rate = rate;
+  if (onend) u.onend = onend;
   speechSynthesis.speak(u);
 }
 const speakBtn = (text, cls = 'icon-btn') => canSpeak ? `<button class="${cls}" data-speak="${esc(text)}" title="Escuchar">🔊</button>` : '';
@@ -131,7 +132,9 @@ function diffPair(user, target) {
 }
 
 // ------------------------------------------------------------------ deck (same model as the desktop app)
+const stripDay = t => (t || '').replace(/^Día \d+ · /, '');   // topics used to be "Día 12 · Le travail…"
 function cardDefaults(c) {
+  if (c && c.topic) c.topic = stripDay(c.topic);
   return Object.assign({
     id: uid(), alt: [], note: '', topic: '', status: NEW, created: todayIso(), last_practiced: null,
     next_session: 0, interval: IV.NEW, streak: 0, history: [], source: 'seed', updated: 0,
@@ -263,9 +266,10 @@ function stats() {
 function topicGroups(cards = state.cards) {
   const counts = new Map();
   cards.forEach(c => { if (c.topic) counts.set(c.topic, (counts.get(c.topic) || 0) + 1); });
-  const groups = [['Segunda tanda · días 12–21', []], ['Módulos', []], ['Mis apuntes', []], ['Frases y banco', []]];
-  for (const [t, n] of counts) groups[/^Día \d+/.test(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^apuntes · /.test(t) ? 2 : 3][1].push([t, n]);
-  groups[0][1].sort((a, b) => parseInt(a[0].slice(4)) - parseInt(b[0].slice(4)));
+  const course = (window.DEFIS || []).map(d => stripDay(d.topic));
+  const groups = [['Temas', []], ['Módulos', []], ['Mis apuntes', []], ['Frases y banco', []]];
+  for (const [t, n] of counts) groups[course.includes(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^apuntes · /.test(t) ? 2 : 3][1].push([t, n]);
+  groups[0][1].sort((a, b) => course.indexOf(a[0]) - course.indexOf(b[0]));
   groups[1][1].sort(); groups[2][1].sort(); groups[3][1].sort();
   return groups.filter(g => g[1].length);
 }
@@ -370,6 +374,7 @@ function openEditor(id, onDone) {
 let activeTab = 'practice';
 const RENDER = {};
 function showTab(name) {
+  if (activeTab === 'sounds' && name !== 'sounds' && typeof stopSndMedia === 'function') stopSndMedia();
   activeTab = name;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
@@ -386,6 +391,7 @@ const P = Object.assign({ running: false, queue: [], idx: 0, answered: false, sn
   ok: 0, ko: 0, almost: 0, size: 20, streak: 0, best: 0, lastInput: '', mode: 'smart', topics: [], onlyDiff: false, level: 'hard' }, (() => {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY)) || {}; } catch { return {}; }
 })());
+P.topics = (P.topics || []).map(stripDay);
 const saveSession = () => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(P)); } catch {} };
 function currentCard() {
   while (P.idx < P.queue.length) { const c = getCard(P.queue[P.idx]); if (c) return c; P.idx++; }
@@ -798,8 +804,7 @@ RENDER.oral = function renderOral() {
   v.innerHTML = `
     <div class="card col">
       <div style="font-size:1.4rem;font-weight:800">🎤 Défi oral</div>
-      <div class="day-chips" id="day-chips">${DEFIS.map(x => `<button data-day="${x.day}" class="${x.day === d.day ? 'on' : ''}">Día ${x.day}${(state.defis[x.day] || []).length ? ' ✓' : ''}</button>`).join('')}</div>
-      <div>${topicChip(d.topic)}</div>
+      <select class="search" id="day-sel">${DEFIS.map(x => `<option value="${x.day}" ${x.day === d.day ? 'selected' : ''}>${esc(x.title)}${(state.defis[x.day] || []).length ? ' ✓' : ''}</option>`).join('')}</select>
       <div class="prompt" style="font-size:1.35rem">${esc(d.prompt)} ${speakBtn(d.prompt, 'icon-btn icon-inline')}</div>
       <ul class="questions">${d.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
       <div class="note"><span>💡</span><span>${esc(d.tip)} Habla 2–3 minutos.</span></div>
@@ -823,7 +828,7 @@ RENDER.oral = function renderOral() {
       <button class="btn btn-learned" id="done" style="margin-top:8px">✔ Marcar como hecho${done.length ? ` (${done.length})` : ''}</button>
       ${done.length ? `<div class="muted small">Última vez: ${formatDate(done[done.length - 1])}</div>` : ''}
     </div>`;
-  $('#day-chips', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; O.day = +b.dataset.day; resetTimer(); RENDER.oral(); };
+  $('#day-sel', v).onchange = e => { O.day = +e.target.value; O.words = null; resetTimer(); RENDER.oral(); };
   $('#reroll', v).onclick = () => { O.words = null; RENDER.oral(); };
   $('#dur-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; O.seconds = +b.dataset.s; resetTimer(); RENDER.oral(); };
   $('#t-start', v).onclick = toggleTimer;
@@ -867,6 +872,203 @@ async function toggleRecording() {
     rec.start(); O.recorder = rec; if (!O.running) toggleTimer(); else RENDER.oral();
   } catch (e) { console.error(e); toast('No se pudo acceder al micrófono'); }
 }
+
+// ------------------------------------------------------------------ SOUNDS (pronunciation: tips + minimal pairs + speech recognition + record & compare)
+const SOUNDS = window.SOUNDS || [], HOMO = window.SOUND_HOMOPHONES || {};
+const SND_KEY = 'ft_sounds_v1';                       // listening-quiz stats, per device (not synced)
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const SN = { id: (SOUNDS[0] || {}).id, mode: 'listen', q: null, picked: null, round: 0, ok: 0, idx: 0,
+  listening: false, heard: null, recObj: null, recorder: null, chunks: [], audioUrl: null, recTimer: null };
+let sndStats = (() => { try { return JSON.parse(localStorage.getItem(SND_KEY)) || {}; } catch { return {}; } })();
+const saveSnd = () => { try { localStorage.setItem(SND_KEY, JSON.stringify(sndStats)); } catch {} };
+const ROUND = 10;
+function sndItems(s) {
+  const seen = new Set(), out = [];
+  s.pairs.forEach(p => { [[p[0], p[1], p[2], p[3]], [p[2], p[3], p[0], p[1]]].forEach(([fr, es, other, otherEs]) => { if (!seen.has(fr)) { seen.add(fr); out.push({ fr, es, other, otherEs }); } }); });
+  s.words.forEach(fr => { if (!seen.has(fr)) { seen.add(fr); out.push({ fr }); } });
+  s.phrases.forEach(fr => out.push({ fr, phrase: true }));
+  return out;
+}
+const sndNorm = t => normalize(t).replace(/-/g, ' ');
+const sndForms = w => [w, ...(HOMO[w] || [])].map(sndNorm);
+function newListenQ(s) {
+  const p = s.pairs[Math.floor(Math.random() * s.pairs.length)], a = Math.random() < .5 ? 0 : 1;
+  SN.q = { pair: p, answer: a }; SN.picked = null;
+  speak(a ? p[2] : p[0], .85);
+}
+function stopSndMedia() {
+  try { SN.recObj && SN.recObj.abort(); } catch {} SN.recObj = null; SN.listening = false;
+  if (SN.recorder) { try { SN.recorder.stop(); } catch {} }
+  clearTimeout(SN.recTimer);
+}
+function judgeHeard(item, alts) {
+  // alts: transcripts from the recognizer, best first
+  const norm = alts.map(sndNorm);
+  if (item.phrase) {
+    const target = sndNorm(item.fr).split(' '), said = norm[0].split(' ');
+    const marks = target.map(w => said.some(x => x === w || similarity(stripAccents(x), stripAccents(w)) >= .8) ? `<mark class="ok">${esc(w)}</mark>` : `<mark class="ko">${esc(w)}</mark>`);
+    const hits = marks.filter(m => m.includes('"ok"')).length;
+    return { kind: hits === target.length ? 'ok' : hits >= target.length * .6 ? 'close' : 'ko', text: alts[0], detail: marks.join(' ') };
+  }
+  const mine = sndForms(item.fr), other = item.other ? sndForms(item.other) : [];
+  const has = (forms, t) => forms.some(f => t === f || t.split(' ').includes(f));
+  if (has(mine, norm[0])) return { kind: 'ok', text: alts[0] };
+  if (other.length && has(other, norm[0])) return { kind: 'other', text: alts[0] };
+  if (norm.slice(1).some(t => has(mine, t))) return { kind: 'close', text: alts[0] };
+  return { kind: 'ko', text: alts[0] };
+}
+function startListening(item) {
+  if (!SpeechRec) return;
+  stopSndMedia();
+  const r = new SpeechRec(); r.lang = 'fr-FR'; r.interimResults = false; r.maxAlternatives = 5; r.continuous = false;
+  SN.recObj = r; SN.listening = true; SN.heard = null;
+  r.onresult = e => {
+    const res = e.results[0], alts = [...res].map(a => a.transcript.trim()).filter(Boolean);
+    SN.heard = alts.length ? judgeHeard(item, alts) : { kind: 'none' };
+  };
+  r.onerror = e => { SN.heard = { kind: 'error', text: e.error }; };
+  r.onend = () => { SN.listening = false; SN.recObj = null; if (!SN.heard) SN.heard = { kind: 'none' }; if (activeTab === 'sounds') RENDER.sounds(); };
+  try { r.start(); } catch (e) { SN.listening = false; SN.heard = { kind: 'error', text: e.message }; }
+  RENDER.sounds();
+}
+async function toggleSndRecording() {
+  if (SN.recorder) { SN.recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const rec = new MediaRecorder(stream); SN.chunks = [];
+    rec.ondataavailable = e => e.data.size && SN.chunks.push(e.data);
+    rec.onstop = () => {
+      clearTimeout(SN.recTimer); stream.getTracks().forEach(t => t.stop());
+      if (SN.audioUrl) URL.revokeObjectURL(SN.audioUrl);
+      SN.audioUrl = URL.createObjectURL(new Blob(SN.chunks, { type: rec.mimeType || 'audio/webm' }));
+      SN.recorder = null; if (activeTab === 'sounds') RENDER.sounds();
+    };
+    rec.start(); SN.recorder = rec; SN.recTimer = setTimeout(() => rec.state === 'recording' && rec.stop(), 8000);
+    RENDER.sounds();
+  } catch (e) { console.error(e); toast('No se pudo acceder al micrófono'); }
+}
+function playModelThenMe(text) {
+  if (!SN.audioUrl) return;
+  const me = () => { const a = new Audio(SN.audioUrl); a.play().catch(() => {}); };
+  if (!canSpeak) return me();
+  let done = false; const go = () => { if (!done) { done = true; setTimeout(me, 350); } };
+  speak(text, .92, go);
+  setTimeout(go, 1200 + text.length * 110);              // some browsers never fire onend
+}
+RENDER.sounds = function renderSounds() {
+  updateHeader();
+  const v = $('#view-sounds');
+  const s = SOUNDS.find(x => x.id === SN.id) || SOUNDS[0];
+  if (!s) { v.innerHTML = '<div class="card muted">No hay contenido de sonidos.</div>'; return; }
+  if (SN.mode === 'listen' && !s.pairs.length) SN.mode = 'repeat';
+  const items = sndItems(s); SN.idx = Math.min(SN.idx, items.length - 1);
+  const item = items[SN.idx];
+  const pct = id => { const t = sndStats[id]; return t && t.n ? Math.round(100 * t.ok / t.n) : null; };
+  const chip = x => { const p = pct(x.id); return `<button data-s="${x.id}" class="${x.id === s.id ? 'on' : ''}">${esc(x.title)}${p != null ? ` <small>${p}%</small>` : ''}</button>`; };
+  const modes = [['listen', '👂 Escucha'], ['repeat', '🗣️ Repite'], ['record', '🎙 Grábate']].filter(([m]) => m !== 'listen' || s.pairs.length);
+  let body = '';
+  if (SN.mode === 'listen') {
+    if (SN.round >= ROUND) {
+      body = `<div class="col" style="align-items:center;text-align:center">
+        <div style="font-size:2.6rem">${SN.ok >= 8 ? '🏆' : SN.ok >= 6 ? '👍' : '💪'}</div>
+        <div style="font-size:1.3rem;font-weight:800">${SN.ok} / ${ROUND}</div>
+        <div class="muted">${SN.ok >= 8 ? '¡Ya distingues bien este sonido!' : 'Repasa el truco de arriba y vuelve a intentarlo: oír la diferencia es el primer paso.'}</div>
+        <button class="btn btn-grad" id="l-again">🔁 Otra ronda</button></div>`;
+    } else if (!SN.q) {
+      body = `<div class="col" style="align-items:center;text-align:center">
+        <div class="muted">Oirás una palabra. Elige cuál de las dos es. Rondas de ${ROUND}.</div>
+        <button class="btn btn-grad" id="l-start">▶ Empezar</button></div>`;
+    } else {
+      const p = SN.q.pair, opts = [[p[0], p[1]], [p[2], p[3]]];
+      body = `<div class="col" style="align-items:center;text-align:center">
+        <div class="muted small">Pregunta ${SN.round + 1} de ${ROUND} · ✓ ${SN.ok}</div>
+        <div class="row center"><button class="btn btn-soft" id="l-play">🔊 Otra vez</button><button class="btn btn-ghost" id="l-slow">🐢 Lento</button></div>
+        <div class="snd-opts">${opts.map(([fr, es], i) => {
+          const cls = SN.picked == null ? '' : i === SN.q.answer ? 'right' : i === SN.picked ? 'wrong' : 'dim';
+          return `<button class="snd-opt ${cls}" data-o="${i}" ${SN.picked != null ? 'disabled' : ''}><b>${esc(fr)}</b><span>${esc(es)}</span></button>`; }).join('')}</div>
+        ${SN.picked != null ? `
+          <div class="fb ${SN.picked === SN.q.answer ? 'fb-ok' : 'fb-ko'}" style="width:100%">${SN.picked === SN.q.answer ? '✓ ¡Bien!' : `✗ Era <b>${esc(opts[SN.q.answer][0])}</b>`}</div>
+          <div class="row center">${opts.map(([fr]) => `<button class="btn btn-soft small" data-speak="${esc(fr)}">🔊 ${esc(fr)}</button>`).join('')}</div>
+          <div class="muted small">Escucha las dos seguidas para notar la diferencia.</div>
+          <button class="btn btn-grad" id="l-next">Siguiente →</button>` : ''}
+      </div>`;
+    }
+  } else {
+    const nav = `<div class="row between"><button class="btn btn-ghost small" id="i-prev">←</button>
+      <span class="muted small">${SN.idx + 1} / ${items.length}</span><button class="btn btn-ghost small" id="i-next">→</button></div>`;
+    const head = `<div class="snd-word ${item.phrase ? 'phrase' : ''}">${esc(item.fr)}</div>${item.es ? `<div class="muted">${esc(item.es)}</div>` : ''}
+      <div class="row center"><button class="btn btn-soft" data-speak="${esc(item.fr)}">🔊 Escuchar</button><button class="btn btn-ghost" id="i-slow">🐢 Lento</button></div>`;
+    if (SN.mode === 'repeat') {
+      let fb = '';
+      const h = SN.heard;
+      if (h) {
+        if (h.kind === 'ok') fb = `<div class="fb fb-ok">✓ Se ha entendido «${esc(h.text)}»</div>${h.detail ? `<div class="snd-detail">${h.detail}</div>` : ''}`;
+        else if (h.kind === 'other') fb = `<div class="fb fb-warn">Se ha entendido «<b>${esc(h.text)}</b>» (${esc(item.otherEs)}), no «${esc(item.fr)}». Repasa el truco de arriba.</div>`;
+        else if (h.kind === 'close') fb = `<div class="fb fb-warn">≈ Casi: se ha entendido «${esc(h.text)}»</div>${h.detail ? `<div class="snd-detail">${h.detail}</div>` : ''}`;
+        else if (h.kind === 'ko') fb = `<div class="fb fb-ko">Se ha entendido «${esc(h.text)}»</div>${h.detail ? `<div class="snd-detail">${h.detail}</div>` : ''}`;
+        else if (h.kind === 'error' && /not-allowed|service-not-allowed/.test(h.text)) fb = `<div class="fb fb-ko">El navegador no ha dado permiso al micrófono o al reconocimiento de voz.</div>`;
+        else if (h.kind === 'error' && /network/.test(h.text)) fb = `<div class="fb fb-ko">El reconocimiento de voz necesita conexión a internet.</div>`;
+        else fb = `<div class="fb fb-warn">No se ha oído nada. Toca 🎤 y habla justo después.</div>`;
+      }
+      body = `${nav}<div class="col" style="align-items:center;text-align:center">${head}
+        ${SpeechRec ? `<button class="btn ${SN.listening ? 'btn-diff' : 'btn-grad'} big-mic" id="i-say" ${SN.listening ? 'disabled' : ''}>${SN.listening ? '👂 Escuchando…' : '🎤 Dilo'}</button>`
+          : '<div class="note"><span>ℹ️</span><span>Este navegador no tiene reconocimiento de voz. Prueba en Chrome, o usa «🎙 Grábate».</span></div>'}
+        ${fb}
+        </div>
+        <div class="muted small" style="margin-top:10px">El reconocimiento dice qué palabra ha entendido; no puntúa tu acento. Si se equivoca con algo que te sonó bien, no te preocupes: repite 2–3 veces y fíjate en la tendencia.</div>`;
+    } else {
+      body = `${nav}<div class="col" style="align-items:center;text-align:center">${head}
+        ${window.MediaRecorder ? `<button class="btn ${SN.recorder ? 'btn-diff' : 'btn-grad'} big-mic" id="i-rec">${SN.recorder ? '⏹ Parar' : '🎙 Grabarme'}</button>` : '<span class="muted small">Tu navegador no permite grabar audio.</span>'}
+        ${SN.audioUrl && !SN.recorder ? `<div class="row center"><button class="btn btn-learned" id="i-cmp">▶ Modelo y después yo</button><button class="btn btn-soft" id="i-me">▶ Solo yo</button></div>
+          <div class="muted small">Fíjate sobre todo en el sonido de esta sección. La grabación no se guarda.</div>` : ''}
+      </div>`;
+    }
+  }
+  v.innerHTML = `
+    <div class="card col">
+      <div style="font-size:1.4rem;font-weight:800">🗣️ Sonidos</div>
+      <div class="day-chips snd-chips" id="snd-chips">${SOUNDS.map(chip).join('')}</div>
+    </div>
+    <details class="card gram" id="snd-tip" ${SN.tipOpen !== false ? 'open' : ''} style="margin-top:14px">
+      <summary>${esc(s.title)} <span class="muted small">· ${esc(s.sub)}</span></summary>
+      <div class="gram-body">${s.tip}
+        ${s.pairs.length ? `<div class="snd-pairs">${s.pairs.map(p => `<span class="snd-pair"><button class="wchip" data-speak="${esc(p[0])}">${esc(p[0])}</button><span class="muted">≠</span><button class="wchip" data-speak="${esc(p[2])}">${esc(p[2])}</button></span>`).join('')}</div>
+          <div class="muted small">Toca para oír cada palabra.</div>` : ''}
+      </div>
+    </details>
+    <div class="card col" style="margin-top:14px">
+      <div class="seg" id="snd-mode" style="align-self:center">${modes.map(([m, l]) => `<button data-m="${m}" class="${SN.mode === m ? 'on' : ''}">${l}</button>`).join('')}</div>
+      ${body}
+    </div>`;
+
+  $('#snd-chips', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; stopSndMedia();
+    Object.assign(SN, { id: b.dataset.s, q: null, picked: null, round: 0, ok: 0, idx: 0, heard: null, audioUrl: null }); RENDER.sounds(); };
+  $('#snd-tip', v).addEventListener('toggle', e => { SN.tipOpen = e.target.open; });
+  $('#snd-mode', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; stopSndMedia();
+    Object.assign(SN, { mode: b.dataset.m, heard: null, audioUrl: null }); RENDER.sounds(); };
+  const on = (sel, fn) => { const el = $(sel, v); if (el) el.onclick = fn; };
+  on('#l-start', () => { SN.round = 0; SN.ok = 0; newListenQ(s); RENDER.sounds(); });
+  on('#l-again', () => { SN.round = 0; SN.ok = 0; newListenQ(s); RENDER.sounds(); });
+  on('#l-play', () => speak(SN.q.answer ? SN.q.pair[2] : SN.q.pair[0], .85));
+  on('#l-slow', () => speak(SN.q.answer ? SN.q.pair[2] : SN.q.pair[0], .6));
+  on('#l-next', () => { SN.round++; if (SN.round < ROUND) newListenQ(s); else SN.q = null; RENDER.sounds(); });
+  const opts = $('.snd-opts', v);
+  if (opts) opts.onclick = e => {
+    const b = e.target.closest('button[data-o]'); if (!b || SN.picked != null) return;
+    SN.picked = +b.dataset.o; const right = SN.picked === SN.q.answer;
+    if (right) SN.ok++;
+    const t = sndStats[s.id] = sndStats[s.id] || { n: 0, ok: 0 }; t.n++; if (right) t.ok++; saveSnd();
+    navigator.vibrate?.(right ? 30 : [60, 40, 60]);
+    RENDER.sounds();
+  };
+  on('#i-prev', () => { stopSndMedia(); SN.idx = (SN.idx - 1 + items.length) % items.length; SN.heard = null; SN.audioUrl = null; RENDER.sounds(); });
+  on('#i-next', () => { stopSndMedia(); SN.idx = (SN.idx + 1) % items.length; SN.heard = null; SN.audioUrl = null; RENDER.sounds(); });
+  on('#i-slow', () => speak(item.fr, .6));
+  on('#i-say', () => startListening(item));
+  on('#i-rec', toggleSndRecording);
+  on('#i-cmp', () => playModelThenMe(item.fr));
+  on('#i-me', () => { if (SN.audioUrl) new Audio(SN.audioUrl).play().catch(() => {}); });
+};
 
 // ------------------------------------------------------------------ GRAMMAR (quick reference)
 const GR = { q: '', open: null };
@@ -924,7 +1126,7 @@ RENDER.data = function renderData() {
       <label class="btn btn-soft file-btn" style="width:fit-content">📂 Elegir archivo .json<input type="file" id="imp-json" accept=".json,application/json"></label>
       <hr class="sep">
       <div style="font-weight:800">Empezar de cero</div>
-      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, días 12–21 y módulos).</div>
+      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, temas y módulos).</div>
       <div><button class="btn btn-diff" id="reset">Restablecer</button></div>
     </div>
     <div class="card col" style="margin-top:14px">
