@@ -15,7 +15,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-23';
+const APP_VERSION = '2026-11-24';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -57,18 +57,32 @@ function toast(msg) {
 
 // ------------------------------------------------------------------ pronunciation (Web Speech API, works offline with system voices)
 const canSpeak = 'speechSynthesis' in window;
-let frVoice = null;
+let frVoice = null, frVoices = [];
+const VOICE_KEY = 'ft_voice_v1';                    // chosen voice + speed: per device (each device has its own voices)
+const voicePref = Object.assign({ name: '', speed: 1 }, (() => { try { return JSON.parse(localStorage.getItem(VOICE_KEY)) || {}; } catch { return {}; } })());
+const saveVoicePref = () => { try { localStorage.setItem(VOICE_KEY, JSON.stringify(voicePref)); } catch {} };
+const NOVELTY = /grandma|grandpa|grand-m|grand-p|eddy|flo\b|reed|rocko|sandy|shelley|jacques|bad news|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|albert|bahh|fred|junior|kathy|ralph/i;
+function voiceScore(v) {
+  let s = 0;
+  if (/natural|neural|online/i.test(v.name)) s += 6;          // Edge / Windows neural voices
+  if (/premium|enhanced|améliorée|mejorada|siri/i.test(v.name)) s += 5; // Apple downloaded voices
+  if (/google/i.test(v.name)) s += 4;                          // Chrome / Android
+  if (/^fr[-_]FR/i.test(v.lang)) s += 2;
+  if (NOVELTY.test(v.name)) s -= 20;
+  return s;
+}
 function pickVoice() {
   if (!canSpeak) return;
-  const vs = speechSynthesis.getVoices();
-  frVoice = vs.find(v => /^fr[-_]FR/i.test(v.lang)) || vs.find(v => /^fr/i.test(v.lang)) || null;
+  frVoices = speechSynthesis.getVoices().filter(v => /^fr/i.test(v.lang)).sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
+  frVoice = frVoices.find(v => v.name === voicePref.name) || frVoices[0] || null;
+  try { if (activeTab === 'data') RENDER.data(); } catch {}   // voices load async; activeTab may not exist yet on first call
 }
 if (canSpeak) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 function speak(text, rate = 0.92, onend) {
   if (!canSpeak || !text) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/…/g, '').replace(/____/g, ' '));
-  u.lang = frVoice ? frVoice.lang : 'fr-FR'; if (frVoice) u.voice = frVoice; u.rate = rate;
+  u.lang = frVoice ? frVoice.lang : 'fr-FR'; if (frVoice) u.voice = frVoice; u.rate = rate * (voicePref.speed || 1);
   if (onend) u.onend = onend;
   speechSynthesis.speak(u);
 }
@@ -1110,7 +1124,21 @@ RENDER.data = function renderData() {
       <div><label class="lbl">Objetivo diario (respuestas)</label>
         <div class="seg" id="goal-seg" style="margin-top:6px">${[10, 20, 30, 50].map(n => `<button data-g="${n}" class="${st.dailyGoal === n ? 'on' : ''}">${n}</button>`).join('')}</div></div>
       ${canSpeak ? `<label class="check"><input type="checkbox" id="auto-speak" ${st.autoSpeak ? 'checked' : ''}> Leer la respuesta en voz alta al comprobar</label>
-        <div class="row"><button class="btn btn-soft" id="test-voice">🔊 Probar voz</button><span class="muted small">${frVoice ? `Voz: ${esc(frVoice.name)}` : 'Si no oyes nada, instala una voz francesa en los ajustes del sistema.'}</span></div>`
+        <div><label class="lbl">Voz francesa (${frVoices.length} en este dispositivo)</label>
+          ${frVoices.length ? `<select class="search" id="voice-sel" style="margin-top:6px">${frVoices.map(v => `<option value="${esc(v.name)}" ${frVoice && v.name === frVoice.name ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}${v.localService === false ? ' · online' : ''}</option>`).join('')}</select>`
+            : '<div class="muted small">No hay ninguna voz francesa instalada. Mira abajo cómo añadir una.</div>'}</div>
+        <div><label class="lbl">Velocidad</label>
+          <div class="seg" id="speed-seg" style="margin-top:6px">${[[.8, 'Lenta'], [.9, 'Algo lenta'], [1, 'Normal'], [1.1, 'Rápida']].map(([n, l]) => `<button data-sp="${n}" class="${voicePref.speed === n ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="row"><button class="btn btn-soft" id="test-voice">🔊 Probar voz</button></div>
+        <details class="voice-help"><summary>¿Suena robótica? Cómo instalar una voz mejor</summary>
+          <ul class="steps">
+            <li><b>iPhone / iPad:</b> Ajustes → Accesibilidad → Contenido leído → Voces → Francés. Descarga una voz marcada como «mejorada» o «premium». Después cierra la app del todo, vuelve a abrirla y elígela aquí.</li>
+            <li><b>Mac:</b> Ajustes del Sistema → Accesibilidad → Contenido leído → Voz del sistema → Gestionar voces → Francés. Descarga una voz «mejorada» o «premium» y reinicia el navegador.</li>
+            <li><b>Windows:</b> abre la app en <b>Microsoft Edge</b>, que incluye voces «Natural» online muy buenas (por ejemplo, «Microsoft Denise Online (Natural)»). También puedes añadir voces en Configuración → Hora e idioma → Voz.</li>
+            <li><b>Android / Chrome:</b> elige una voz «Google français». En Android, en Ajustes → Texto a voz → Motor de Google → Instalar datos de voz → Francés, descarga la voz de alta calidad.</li>
+          </ul>
+          <div class="muted small">Cada dispositivo tiene sus propias voces, así que la elección se guarda en cada uno por separado. Las voces «online» necesitan internet.</div>
+        </details>`
         : '<div class="muted small">Este navegador no permite leer en voz alta.</div>'}
     </div>
     ${syncCardHtml()}
@@ -1136,7 +1164,9 @@ RENDER.data = function renderData() {
   $('#goal-seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; st.dailyGoal = +b.dataset.g; st.updated = Date.now(); save(); RENDER.data(); };
   if ($('#auto-speak')) $('#auto-speak').onchange = e => { st.autoSpeak = e.target.checked; st.updated = Date.now(); save(); };
   bindSyncUi();
-  if ($('#test-voice')) $('#test-voice').onclick = () => speak('Bonjour ! On est dans les temps.');
+  if ($('#test-voice')) $('#test-voice').onclick = () => speak('Bonjour ! Je voudrais un croissant et un café, s’il vous plaît.');
+  if ($('#voice-sel')) $('#voice-sel').onchange = e => { voicePref.name = e.target.value; saveVoicePref(); frVoice = frVoices.find(v => v.name === voicePref.name) || frVoice; speak('Bonjour ! Comment ça va ?'); };
+  if ($('#speed-seg')) $('#speed-seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; voicePref.speed = +b.dataset.sp; saveVoicePref(); RENDER.data(); speak('Bonjour ! Comment ça va ?'); };
   $('#export').onclick = exportData;
   $('#imp-json').onchange = importData;
   $('#check-update').onclick = forceUpdate;
