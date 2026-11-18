@@ -15,7 +15,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-20';
+const APP_VERSION = '2026-11-21';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -263,13 +263,13 @@ function stats() {
 function topicGroups(cards = state.cards) {
   const counts = new Map();
   cards.forEach(c => { if (c.topic) counts.set(c.topic, (counts.get(c.topic) || 0) + 1); });
-  const groups = [['Segunda tanda · días 12–21', []], ['Mis apuntes', []], ['Frases y banco', []]];
-  for (const [t, n] of counts) groups[/^Día \d+/.test(t) ? 0 : /^apuntes · /.test(t) ? 1 : 2][1].push([t, n]);
+  const groups = [['Segunda tanda · días 12–21', []], ['Módulos', []], ['Mis apuntes', []], ['Frases y banco', []]];
+  for (const [t, n] of counts) groups[/^Día \d+/.test(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^apuntes · /.test(t) ? 2 : 3][1].push([t, n]);
   groups[0][1].sort((a, b) => parseInt(a[0].slice(4)) - parseInt(b[0].slice(4)));
-  groups[1][1].sort(); groups[2][1].sort();
+  groups[1][1].sort(); groups[2][1].sort(); groups[3][1].sort();
   return groups.filter(g => g[1].length);
 }
-const shortTopic = t => t.replace(/^apuntes · /, '');
+const shortTopic = t => t.replace(/^(apuntes|Módulo) · /, '');
 
 // ------------------------------------------------------------------ daily activity, streaks, goal
 function activityByDay() {
@@ -868,6 +868,36 @@ async function toggleRecording() {
   } catch (e) { console.error(e); toast('No se pudo acceder al micrófono'); }
 }
 
+// ------------------------------------------------------------------ GRAMMAR (quick reference)
+const GR = { q: '', open: null };
+RENDER.grammar = function renderGrammar() {
+  updateHeader();
+  const v = $('#view-grammar'), all = window.GRAMMAR || [];
+  const strip = h => h.replace(/<[^>]+>/g, ' ');
+  const q = normalize(GR.q);
+  const list = all.filter(g => !q || normalize(g.title + ' ' + strip(g.html)).includes(q));
+  const groups = [...new Set(list.map(g => g.group))];
+  v.innerHTML = `
+    <div class="card col">
+      <div style="font-size:1.4rem;font-weight:800">📖 Gramática</div>
+      <input class="search" id="gq" type="search" placeholder="Buscar: subjonctif, si, dont, futur…" value="${esc(GR.q)}">
+      <div class="gram-index">${all.map(g => `<button data-g="${g.id}" class="${list.includes(g) ? '' : 'dim'}">${esc(g.title)}</button>`).join('')}</div>
+    </div>
+    ${groups.map(gr => `<div class="gram-group">${esc(gr)}</div>` + list.filter(g => g.group === gr).map(g => `
+      <details class="card gram" id="g-${g.id}" ${GR.open === g.id || (q && list.length <= 3) ? 'open' : ''}>
+        <summary>${esc(g.title)}</summary>
+        <div class="gram-body">${g.html}</div>
+      </details>`).join('')).join('') || '<div class="card muted">Nada coincide con la búsqueda.</div>'}`;
+  const gq = $('#gq', v);
+  gq.addEventListener('input', e => { GR.q = e.target.value; const pos = e.target.selectionStart; RENDER.grammar(); const n = $('#gq'); n.focus(); n.setSelectionRange(pos, pos); });
+  $('.gram-index', v).onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    GR.q = ''; GR.open = b.dataset.g; RENDER.grammar();
+    const el = $(`#g-${b.dataset.g}`); if (el) { el.open = true; el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  };
+  v.querySelectorAll('details.gram').forEach(d => d.addEventListener('toggle', () => { if (d.open) GR.open = d.id.slice(2); }));
+};
+
 // ------------------------------------------------------------------ DATA (settings, backup / sync)
 RENDER.data = function renderData() {
   updateHeader();
@@ -894,7 +924,7 @@ RENDER.data = function renderData() {
       <label class="btn btn-soft file-btn" style="width:fit-content">📂 Elegir archivo .json<input type="file" id="imp-json" accept=".json,application/json"></label>
       <hr class="sep">
       <div style="font-weight:800">Empezar de cero</div>
-      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes y los días 12–21).</div>
+      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, días 12–21 y módulos).</div>
       <div><button class="btn btn-diff" id="reset">Restablecer</button></div>
     </div>
     <div class="card col" style="margin-top:14px">

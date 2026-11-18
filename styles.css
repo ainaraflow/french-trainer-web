@@ -207,5 +207,28 @@ mark.ko { background: #ffd2da; color: #8a1c33; border-radius: 4px; padding: 0 1p
 .fb-warn mark.ok { background: #ffe7a3; color: #6b4a00; }
 .yours { font-weight: 700; }
 
+/* grammar */
+.gram-index { display: flex; flex-wrap: wrap; gap: 6px; }
+.gram-index button { border: 0; border-radius: 999px; padding: 6px 11px; background: #f2efff; color: var(--primary); font-weight: 700; font-size: .8rem; cursor: pointer; }
+.gram-index button.dim { opacity: .35; }
+.gram-group { margin: 20px 4px 8px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-size: .8rem; }
+details.gram { margin-top: 10px; padding: 18px 20px; }
+details.gram summary { font-size: 1.1rem; }
+details.gram summary::after { content: '＋'; float: right; color: var(--primary); }
+details.gram[open] summary::after { content: '－'; }
+.gram-body { margin-top: 12px; line-height: 1.55; }
+.gram-body p { margin: 8px 0; }
+.gram-body ul { margin: 6px 0; padding-left: 20px; }
+.gram-body table { border-collapse: collapse; margin: 10px 0; font-size: .9rem; display: block; overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+.gram-body th, .gram-body td { min-width: 5.2em; }
+.gram-body td:first-child { white-space: nowrap; }
+.gram-body th { background: #f2efff; color: var(--primary); text-align: left; padding: 7px 9px; }
+.gram-body td { border-top: 1px solid #eee; padding: 7px 9px; vertical-align: top; }
+.gram-body b { color: var(--primary); }
+.gram-body .ex { background: #f7f9ff; border-radius: 10px; padding: 8px 12px; font-style: italic; }
+.gram-body .tip { background: #fff7e6; border-radius: 12px; padding: 10px 12px; margin-top: 10px; font-size: .92rem; }
+.gram-body .order { font-weight: 800; text-align: center; background: #f2efff; border-radius: 10px; padding: 8px; }
+@media (max-width: 480px) { .tabs button { font-size: .6rem; } .tabs .ico { font-size: 1.15rem; } }
+
 /* small phones */
 @media (max-width: 480px) { .title { font-size: 1.25rem; } .pill { font-size: .72rem; padding: 5px 10px; } }
