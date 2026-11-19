@@ -258,3 +258,5 @@ details.gram[open] summary::after { content: '－'; }
 .voice-help summary { cursor: pointer; font-weight: 700; color: var(--primary); }
 .voice-help .steps { margin-top: 10px; }
 .diag { white-space: pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .72rem; background: #f6f6fb; border-radius: 10px; padding: 10px; max-height: 320px; overflow: auto; word-break: break-word; }
+button:active, .btn:active { transform: scale(.95); filter: brightness(.93); }
+button { transition: transform .08s, filter .08s; -webkit-tap-highlight-color: rgba(109,93,252,.15); }

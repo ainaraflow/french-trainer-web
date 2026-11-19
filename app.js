@@ -15,7 +15,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-25';
+const APP_VERSION = '2026-11-26';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -107,7 +107,20 @@ function speak(text, rate = 0.92, onend) {
   if (onend) u.onend = onend;
   synth.speak(u);
   if (voice) setTimeout(() => { if (!started && !synth.speaking) fallback('no empieza'); }, 1500);
+  const myTurn = curUtter;
+  setTimeout(() => {                                   // nothing at all after 3 s → tell the user instead of failing silently
+    const last = curUtter; if (last !== myTurn && last !== u && !fell) return;
+    if (!synth.speaking && !speechLog.slice(-2).some(l => l.includes('empieza ✓'))) {
+      logSpeech('nada en 3 s'); toast('🔇 No se ha podido reproducir la voz · mira Datos → 🩺 Diagnóstico');
+    }
+  }, 3000);
 }
+document.addEventListener('touchstart', () => {}, { passive: true });   // iOS only shows :active (pressed) styles with a touch listener
+// iOS: the first utterance must come from a touch; an empty one on the first touch "unlocks" speech for later calls.
+if (canSpeak) document.addEventListener('touchend', function unlock() {
+  document.removeEventListener('touchend', unlock);
+  try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); logSpeech('desbloqueo iOS'); } catch {}
+}, { passive: true });
 const speakBtn = (text, cls = 'icon-btn') => canSpeak ? `<button class="${cls}" data-speak="${esc(text)}" title="Escuchar">🔊</button>` : '';
 document.addEventListener('click', e => { const b = e.target.closest('[data-speak]'); if (b) { e.stopPropagation(); speak(b.dataset.speak); } });
 
