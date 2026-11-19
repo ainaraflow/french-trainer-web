@@ -269,3 +269,19 @@ button { transition: transform .08s, filter .08s; -webkit-tap-highlight-color: r
 .lvl-C1 { background: #2b2350; color: #ffd76a; }
 .fsep { display: inline-block; width: 1px; height: 22px; background: #ddd; margin: 0 4px; vertical-align: middle; }
 .lvl-mix { background: linear-gradient(90deg, #d8f3dc, #e3ecff); color: #2a5a8a; }
+
+/* friends */
+.rank { display: flex; flex-direction: column; gap: 8px; }
+.rank-row { display: grid; grid-template-columns: 2.2em minmax(5em, 9em) 1fr 3em; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 12px; }
+.rank-row.me { background: #f2efff; }
+.rank-pos { font-size: 1.2rem; text-align: center; }
+.rank-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-bar { height: 10px; background: #eee; border-radius: 99px; overflow: hidden; display: block; }
+.rank-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--primary), var(--pink)); border-radius: 99px; }
+.rank-val { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+.today-row, .friend-row { padding: 6px 0; border-top: 1px solid #f0eef8; flex-wrap: wrap; gap: 4px; }
+.challenge { border: 1px solid #ece9fb; border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.challenge.done { background: #fafaff; }
+.ch-line { display: grid; grid-template-columns: minmax(4em, 8em) 1fr 4.5em; gap: 8px; align-items: center; font-size: .9rem; }
+.trophy-row { padding: 6px 0; border-top: 1px solid #f0eef8; }
+.trophies { font-size: 1.25rem; letter-spacing: 2px; margin-left: 6px; }

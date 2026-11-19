@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-12-02';
+const APP_VERSION = '2026-12-03';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -204,6 +204,7 @@ function normalizeState(raw) {
     settings: Object.assign({}, DEFAULT_SETTINGS, raw.settings || {}),
     defis: raw.defis && typeof raw.defis === 'object' ? raw.defis : {},
     deleted: raw.deleted && typeof raw.deleted === 'object' ? raw.deleted : {},
+    social: Object.assign({ name: '', publish: false, friends: [], challenges: [], updated: 0 }, raw.social && typeof raw.social === 'object' ? raw.social : {}),
   };
 }
 function initialState() { return normalizeState({ session_count: 0, cards: clone(window.SEED_CARDS || []), packs: ['base'] }); }
@@ -702,6 +703,7 @@ RENDER.list = function renderList() {
       ${statTile('Total', s.total, '#b06ef5')}${statTile('Nuevas', s.new, STATUS_COLORS.new)}${statTile('Difíciles', s.difficult, STATUS_COLORS.difficult)}
       ${statTile('Aprendidas', s.learned, STATUS_COLORS.learned)}${statTile('Pendientes', s.due, '#6d5dfc')}
     </div>
+    <div class="row" style="margin:4px 0 10px"><button class="btn btn-soft small" id="go-suggest">✨ Sugerir frases nuevas</button></div>
     <div class="toolbar">
       <input class="search" id="q" type="search" placeholder="Buscar en español, francés o tema…" value="${esc(L.q)}">
       <select class="search" id="topic-sel" style="flex:0 1 240px">
@@ -729,6 +731,7 @@ RENDER.list = function renderList() {
     </details>`;
   $('#q', v).addEventListener('input', e => { L.q = e.target.value; L.limit = 80; renderItems(); });
   $('#topic-sel', v).onchange = e => { L.topic = e.target.value; L.limit = 80; renderItems(); };
+  $('#go-suggest', v).onclick = () => showTab('suggest');
   $('#filters', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.cefr) L.cefr = b.dataset.cefr; else L.status = b.dataset.f; L.limit = 80; RENDER.list(); };
   $('#more', v).onclick = () => { L.limit += 80; renderItems(); };
   $('#a-add', v).onclick = () => {
@@ -1345,6 +1348,7 @@ function mergeStates(local, remote) {
     packs: [...new Set([...local.packs, ...remote.packs])],
     fixes: [...new Set([...local.fixes, ...remote.fixes])],
     settings: (local.settings.updated || 0) >= (remote.settings.updated || 0) ? local.settings : remote.settings,
+    social: (local.social.updated || 0) >= (remote.social.updated || 0) ? local.social : remote.social,
   };
 }
 async function syncNow(silent = false) {
@@ -1363,6 +1367,7 @@ async function syncNow(silent = false) {
     }
     await gh(`/gists/${SY.gistId}`, { method: 'PATCH', body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(state) } } }) });
     SY.last = Date.now(); saveSync(); syncError = '';
+    publishPublic().catch(() => {});
     if (!silent) toast('☁️ Sincronizado');
   } catch (e) {
     console.error(e); syncError = e.message || 'Error de red';
@@ -1415,7 +1420,7 @@ function bindSyncUi() {
   const n = $('#sync-now'); if (n) n.onclick = () => syncNow(false);
   const o = $('#sync-off'); if (o) o.onclick = () => {
     if (!confirm('¿Desconectar la sincronización en este dispositivo? Tu progreso local y el de GitHub se conservan.')) return;
-    Object.assign(SY, { token: '', gistId: '', last: 0 }); saveSync(); syncError = ''; RENDER.data();
+    Object.assign(SY, { token: '', gistId: '', last: 0, login: '', pubGistId: '', pubLast: 0, pubSig: '' }); saveSync(); syncError = ''; RENDER.data();
   };
 }
 document.addEventListener('visibilitychange', () => {
@@ -1423,6 +1428,247 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && syncTimer) syncNow(true);
 });
 window.addEventListener('online', () => syncNow(true));
+
+// ------------------------------------------------------------------ FRIENDS (public stats gist + weekly ranking + trophies + 1v1 challenges)
+// Each user publishes ONLY numbers (answers/correct per day, streak, challenges) in a public gist; friends read it.
+const PUB_FILE = 'french_trainer_public.json';
+const FR_CACHE_KEY = 'ft_friends_cache_v1';
+let frCache = (() => { try { return JSON.parse(localStorage.getItem(FR_CACHE_KEY)) || {}; } catch { return {}; } })();
+const saveFrCache = () => { try { localStorage.setItem(FR_CACHE_KEY, JSON.stringify(frCache)); } catch {} };
+const FRS = { metric: 'ok', busy: false, pubError: '', target: 200, dur: 7 };
+const touchSocial = () => { state.social.updated = Date.now(); save(); };
+function dayStats() {
+  const d = {};
+  state.cards.forEach(c => c.history.forEach(h => { const x = d[h.date] = d[h.date] || { n: 0, ok: 0 }; x.n++; if (h.correct) x.ok++; }));
+  return d;
+}
+function streakFrom(days) {
+  const has = k => days[k] && days[k].n > 0, d = new Date();
+  if (!has(isoOf(d))) d.setDate(d.getDate() - 1);
+  let n = 0; while (has(isoOf(d))) { n++; d.setDate(d.getDate() - 1); }
+  return n;
+}
+function weekStartIso(date = new Date()) { const x = new Date(date); x.setHours(12); x.setDate(x.getDate() - (x.getDay() + 6) % 7); return isoOf(x); }
+function datesFrom(startIso, n) { const out = [], d = new Date(startIso + 'T12:00:00'); for (let i = 0; i < n; i++) { out.push(isoOf(d)); d.setDate(d.getDate() + 1); } return out; }
+function isoWeekNo(iso) { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const y = new Date(d.getFullYear(), 0, 4); return 1 + Math.round(((d - y) / 864e5 - 3 + (y.getDay() + 6) % 7) / 7); }
+function sumDays(days, dates) { let n = 0, ok = 0, active = 0; dates.forEach(k => { const x = days && days[k]; if (x && x.n) { n += x.n; ok += x.ok; active++; } }); return { n, ok, active }; }
+function publicPayload() {
+  const all = dayStats(), from = isoOf(new Date(Date.now() - 98 * 864e5)), days = {};
+  Object.keys(all).filter(k => k >= from).forEach(k => { days[k] = all[k]; });
+  const cutoff = isoOf(new Date(Date.now() - 30 * 864e5));
+  return { app: 'french-trainer', v: 1, login: SY.login || '', name: state.social.name || SY.login || '', days,
+    defis: Object.values(state.defis).reduce((a, l) => a + l.length, 0),
+    challenges: state.social.challenges.filter(c => c.end >= cutoff) };
+}
+async function ensureLogin() { if (!SY.login && SY.token) { SY.login = (await gh('/user')).login; saveSync(); } return SY.login; }
+async function publishPublic(force = false) {
+  if (!SY.token || !state.social.publish) return;
+  if (!force && Date.now() - (SY.pubLast || 0) < 5 * 60e3) return;
+  try {
+    await ensureLogin();
+    const body = publicPayload(), sig = JSON.stringify(body);
+    if (!force && sig === SY.pubSig) return;
+    const content = JSON.stringify(Object.assign({ updated: Date.now() }, body));
+    if (!SY.pubGistId) {
+      const found = (await gh('/gists?per_page=100')).find(g => g.files && g.files[PUB_FILE]);
+      if (found) SY.pubGistId = found.id;
+    }
+    if (SY.pubGistId) {
+      try { await gh(`/gists/${SY.pubGistId}`, { method: 'PATCH', body: JSON.stringify({ files: { [PUB_FILE]: { content } } }) }); }
+      catch (e) { if (e.status !== 404) throw e; SY.pubGistId = ''; }
+    }
+    if (!SY.pubGistId) {
+      const g = await gh('/gists', { method: 'POST', body: JSON.stringify({ description: 'French Trainer · estadísticas públicas (solo números)', public: true, files: { [PUB_FILE]: { content } } }) });
+      SY.pubGistId = g.id;
+    }
+    Object.assign(SY, { pubLast: Date.now(), pubSig: sig }); saveSync(); FRS.pubError = '';
+  } catch (e) { console.error(e); FRS.pubError = e.message || 'Error de red'; }
+}
+async function unpublish() {
+  try {
+    if (!SY.pubGistId) { const f = (await gh('/gists?per_page=100')).find(g => g.files && g.files[PUB_FILE]); if (f) SY.pubGistId = f.id; }
+    if (SY.pubGistId) await fetch(`https://api.github.com/gists/${SY.pubGistId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${SY.token}`, Accept: 'application/vnd.github+json' } });
+  } catch (e) { console.error(e); }
+  Object.assign(SY, { pubGistId: '', pubLast: 0, pubSig: '' }); saveSync();
+}
+async function fetchFriend(user) {
+  const key = user.toLowerCase();
+  try {
+    const gists = await gh(`/users/${encodeURIComponent(user)}/gists?per_page=100`);
+    const g = gists.find(x => x.files && x.files[PUB_FILE]);
+    if (!g) { frCache[key] = { fetched: Date.now(), error: 'Todavía no publica sus estadísticas' }; return; }
+    const full = await gh(`/gists/${g.id}`), f = full.files[PUB_FILE];
+    const data = JSON.parse(f.truncated ? await (await fetch(f.raw_url)).text() : f.content);
+    if (data.app !== 'french-trainer') throw new Error('Formato desconocido');
+    frCache[key] = { fetched: Date.now(), data };
+  } catch (e) {
+    frCache[key] = { fetched: Date.now(), error: e.status === 404 ? 'No existe ese usuario de GitHub' : (e.message || 'Error de red'), data: (frCache[key] || {}).data };
+  }
+}
+async function refreshFriends(force = false) {
+  if (!SY.token || FRS.busy) return;
+  const todo = state.social.friends.filter(u => force || !frCache[u.toLowerCase()] || Date.now() - frCache[u.toLowerCase()].fetched > 10 * 60e3);
+  if (!todo.length) return;
+  FRS.busy = true; if (activeTab === 'friends') RENDER.friends();
+  try { await ensureLogin(); for (const u of todo) await fetchFriend(u); } catch (e) { console.error(e); }
+  FRS.busy = false; saveFrCache(); if (activeTab === 'friends') RENDER.friends();
+}
+function people() {
+  const me = { me: true, login: (SY.login || '').toLowerCase(), name: state.social.name || 'Tú', days: dayStats() };
+  const fr = state.social.friends.map(u => { const c = frCache[u.toLowerCase()]; return c && c.data ? { login: u.toLowerCase(), name: c.data.name || u, days: c.data.days || {}, challenges: c.data.challenges || [], updated: c.data.updated } : null; }).filter(Boolean);
+  return [me, ...fr];
+}
+function trophiesFor(p, group, weeks = 12) {
+  const out = [], cur = weekStartIso();
+  for (let i = 1; i <= weeks; i++) {
+    const ws = isoOf(new Date(new Date(cur + 'T12:00:00').getTime() - i * 7 * 864e5)), dates = datesFrom(ws, 7), wk = isoWeekNo(ws);
+    const s = sumDays(p.days, dates);
+    const rivals = group.map(q => sumDays(q.days, dates)).filter(x => x.n > 0);
+    if (rivals.length >= 2 && s.ok > 0 && s.ok >= Math.max(...rivals.map(x => x.ok))) out.push({ icon: '🥇', label: `Ganador/a · semana ${wk}` });
+    if (s.active === 7) out.push({ icon: '🔥', label: `Semana perfecta · semana ${wk}` });
+    if (s.n >= 50 && s.ok / s.n >= 0.9) out.push({ icon: '🎯', label: `90 % de aciertos · semana ${wk}` });
+    if (s.n >= 300) out.push({ icon: '💪', label: `Maratón (300+) · semana ${wk}` });
+  }
+  return out;
+}
+function challengeState(c, group) {
+  const by = l => group.find(p => p.login === (l || '').toLowerCase());
+  const today = todayIso(), n = Math.round((new Date(c.end + 'T12:00:00') - new Date(c.start + 'T12:00:00')) / 864e5) + 1, dates = datesFrom(c.start, n);
+  const prog = p => { if (!p) return null; let cum = 0, reached = null; for (const k of dates) { if (k > today) break; cum += ((p.days || {})[k] || {}).ok || 0; if (!reached && cum >= c.target) reached = k; } return { cum, reached, name: p.name }; };
+  const a = prog(by(c.from)), b = prog(by(c.to));
+  let winner = null, done = false;
+  const ra = a && a.reached && a.reached < today ? a.reached : null, rb = b && b.reached && b.reached < today ? b.reached : null;
+  if (ra || rb || today > c.end) {
+    done = true;
+    if (ra && rb) winner = ra < rb ? 'a' : rb < ra ? 'b' : a.cum > b.cum ? 'a' : b.cum > a.cum ? 'b' : 'tie';
+    else if (ra) winner = 'a'; else if (rb) winner = 'b';
+    else winner = !a || !b ? null : a.cum > b.cum ? 'a' : b.cum > a.cum ? 'b' : 'tie';
+  }
+  return { a, b, done, winner, daysLeft: Math.max(0, Math.round((new Date(c.end + 'T12:00:00') - new Date(today + 'T12:00:00')) / 864e5) + 1) };
+}
+function allChallenges(group) {
+  const me = (SY.login || '').toLowerCase(), seen = new Set(), out = [];
+  [...state.social.challenges, ...group.filter(p => !p.me).flatMap(p => (p.challenges || []).filter(c => (c.to || '').toLowerCase() === me))]
+    .forEach(c => { if (!seen.has(c.id)) { seen.add(c.id); out.push(c); } });
+  return out.sort((x, y) => (y.start || '').localeCompare(x.start || ''));
+}
+const agoText = t => { if (!t) return 'nunca'; const m = Math.round((Date.now() - t) / 60e3); return m < 1 ? 'ahora mismo' : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : `hace ${Math.round(m / 1440)} días`; };
+RENDER.friends = function renderFriends() {
+  updateHeader();
+  const v = $('#view-friends'), so = state.social;
+  if (!SY.token) {
+    v.innerHTML = `<div class="card col"><div style="font-size:1.4rem;font-weight:800">👥 Amigos</div>
+      <div class="muted">Para compartir estadísticas con tus amigos, primero conecta la sincronización con GitHub en <b>Datos → Sincronizar entre dispositivos</b>. Usa el mismo token.</div>
+      <button class="btn btn-grad" id="go-data" style="align-self:flex-start">Ir a Datos</button></div>`;
+    $('#go-data', v).onclick = () => showTab('data'); return;
+  }
+  refreshFriends(false);
+  const group = people(), ws = weekStartIso(), wdates = datesFrom(ws, 7), today = todayIso();
+  const daysLeft = 7 - wdates.indexOf(today);
+  const metricLbl = { ok: 'aciertos', n: 'respuestas', active: 'días activos' };
+  const rank = group.map(p => Object.assign({ p }, sumDays(p.days, wdates))).sort((a, b) => b[FRS.metric] - a[FRS.metric]);
+  const max = Math.max(1, ...rank.map(r => r[FRS.metric]));
+  const medal = i => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+  const chs = allChallenges(group);
+  const friendsWithData = group.filter(p => !p.me);
+  v.innerHTML = `
+    <div class="card col">
+      <div class="row between"><div style="font-size:1.4rem;font-weight:800">👥 Amigos</div>
+        <button class="btn btn-soft small" id="fr-refresh" ${FRS.busy ? 'disabled' : ''}>${FRS.busy ? 'Actualizando…' : '↻ Actualizar'}</button></div>
+      <div class="muted small">Semana ${isoWeekNo(ws)} · ${daysLeft === 1 ? 'último día' : `quedan ${daysLeft} días`} · el ranking se reinicia cada lunes.</div>
+      <div class="seg" id="fr-metric" style="align-self:flex-start">${Object.entries({ ok: '✓ Aciertos', n: '📝 Respuestas', active: '📅 Días' }).map(([k, l]) => `<button data-m="${k}" class="${FRS.metric === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="rank">${rank.map((r, i) => `
+        <div class="rank-row ${r.p.me ? 'me' : ''}">
+          <span class="rank-pos">${r[FRS.metric] ? medal(i) : '·'}</span>
+          <span class="rank-name">${esc(r.p.name)}${r.p.me ? ' <span class="muted small">(tú)</span>' : ''}</span>
+          <span class="rank-bar"><span style="width:${Math.round(100 * r[FRS.metric] / max)}%"></span></span>
+          <span class="rank-val">${r[FRS.metric]}</span>
+        </div>`).join('')}</div>
+      ${friendsWithData.length ? '' : '<div class="muted small">Añade a alguien abajo para empezar a competir.</div>'}
+    </div>
+
+    <div class="card col" style="margin-top:14px">
+      <div style="font-weight:800;font-size:1.1rem">📅 Hoy</div>
+      ${group.map(p => { const t = (p.days || {})[today] || { n: 0, ok: 0 }; return `<div class="row between today-row"><span><b>${esc(p.name)}</b> <span class="muted small">🔥 ${streakFrom(p.days)}</span></span><span class="muted">${t.n} respuestas · ${t.ok} ✓${t.n ? ` · ${Math.round(100 * t.ok / t.n)} %` : ''}</span></div>`; }).join('')}
+      ${friendsWithData.length ? `<div class="muted small">Datos de tus amigos: de su última sincronización.</div>` : ''}
+    </div>
+
+    <div class="card col" style="margin-top:14px">
+      <div style="font-weight:800;font-size:1.1rem">⚔️ Retos</div>
+      ${chs.length ? chs.map(c => {
+        const s = challengeState(c, group), mine = (c.from || '').toLowerCase() === group[0].login;
+        const bar = (x, who) => x ? `<div class="ch-line"><span>${esc(x.name)}</span><span class="rank-bar"><span style="width:${Math.min(100, Math.round(100 * x.cum / c.target))}%"></span></span><span class="rank-val">${x.cum}/${c.target}</span></div>` : `<div class="muted small">${esc(who)}: sin datos todavía</div>`;
+        const res = !s.done ? `<span class="muted small">${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'} restantes</span>`
+          : s.winner === 'tie' ? '<b>🤝 Empate</b>' : s.winner ? `<b>🏆 Gana ${esc((s.winner === 'a' ? s.a : s.b).name)}</b>` : '<span class="muted small">Terminado</span>';
+        return `<div class="challenge ${s.done ? 'done' : ''}">
+          <div class="row between"><b>${c.target} aciertos · del ${formatDate(c.start)} al ${formatDate(c.end)}</b>${mine ? `<button class="icon-btn" data-delch="${esc(c.id)}" title="Borrar reto">🗑</button>` : ''}</div>
+          ${bar(s.a, c.from)}${bar(s.b, c.to)}
+          <div>${res}</div></div>`;
+      }).join('') : '<div class="muted small">Todavía no hay retos.</div>'}
+      ${friendsWithData.length && so.publish ? `
+        <details class="voice-help"><summary>＋ Nuevo reto</summary>
+          <div class="col" style="margin-top:10px">
+            <label class="lbl">Contra</label>
+            <select class="field" id="ch-to">${friendsWithData.map(p => `<option value="${esc(p.login)}">${esc(p.name)} (@${esc(p.login)})</option>`).join('')}</select>
+            <label class="lbl">Meta (aciertos)</label>
+            <div class="seg" id="ch-target">${[100, 200, 300, 500].map(n => `<button data-n="${n}" class="${FRS.target === n ? 'on' : ''}">${n}</button>`).join('')}</div>
+            <label class="lbl">Duración</label>
+            <div class="seg" id="ch-dur">${[3, 7, 14].map(n => `<button data-d="${n}" class="${FRS.dur === n ? 'on' : ''}">${n} días</button>`).join('')}</div>
+            <div class="muted small">Gana quien llegue antes a la meta; si nadie llega, quien tenga más aciertos al final.</div>
+            <button class="btn btn-grad" id="ch-create" style="align-self:flex-start">⚔️ Lanzar reto</button>
+          </div></details>` : friendsWithData.length ? '<div class="muted small">Activa «Publicar mis estadísticas» para poder lanzar retos.</div>' : ''}
+    </div>
+
+    <div class="card col" style="margin-top:14px">
+      <div style="font-weight:800;font-size:1.1rem">🏆 Vitrina de trofeos</div>
+      <div class="muted small">Se ganan cada semana (lunes a domingo): 🥇 más aciertos del grupo · 🔥 7 días seguidos · 🎯 90 % de aciertos (mín. 50) · 💪 300 respuestas o más.</div>
+      ${group.map(p => { const t = trophiesFor(p, group); return `<div class="trophy-row"><b>${esc(p.name)}</b> ${t.length ? `<span class="trophies">${t.map(x => `<span title="${esc(x.label)}">${x.icon}</span>`).join('')}</span>` : '<span class="muted small">— todavía ninguno</span>'}
+        ${p.me && t.length ? `<details><summary class="muted small">Ver detalle</summary><ul class="small">${t.map(x => `<li>${x.icon} ${esc(x.label)}</li>`).join('')}</ul></details>` : ''}</div>`; }).join('')}
+    </div>
+
+    <div class="card col" style="margin-top:14px">
+      <div style="font-weight:800;font-size:1.1rem">🙋 Tu perfil</div>
+      <div><label class="lbl">Apodo (lo que verán tus amigos)</label><input class="field" id="fr-name" maxlength="24" value="${esc(so.name)}" placeholder="${esc(SY.login || 'Tu apodo')}"></div>
+      <label class="check"><input type="checkbox" id="fr-publish" ${so.publish ? 'checked' : ''}> Publicar mis estadísticas</label>
+      <div class="muted small">Se publican en un Gist <b>público</b> de tu cuenta${SY.login ? ` (@${esc(SY.login)})` : ''}: tu apodo, respuestas y aciertos por día (últimas 14 semanas), retos orales hechos y tus retos. <b>Nunca tus tarjetas ni tus frases.</b> Cualquiera que conozca tu usuario podría verlo. Si lo desactivas, se borra.</div>
+      ${so.publish ? `<div class="muted small">${FRS.pubError ? `⚠️ ${esc(FRS.pubError)}` : `Última publicación: ${agoText(SY.pubLast)}`}</div><button class="btn btn-soft small" id="fr-pub-now" style="align-self:flex-start">📤 Publicar ahora</button>` : ''}
+    </div>
+
+    <div class="card col" style="margin-top:14px">
+      <div style="font-weight:800;font-size:1.1rem">➕ Amigos</div>
+      <div class="row"><input class="field" id="fr-add" placeholder="Usuario de GitHub" autocapitalize="off" autocorrect="off" style="flex:1"><button class="btn btn-grad" id="fr-add-btn">Añadir</button></div>
+      <div class="muted small">Tu amigo/a tiene que usar esta app con su propia cuenta de GitHub y activar «Publicar mis estadísticas».</div>
+      ${so.friends.map(u => { const c = frCache[u.toLowerCase()] || {}; return `<div class="row between friend-row"><span><b>@${esc(u)}</b> <span class="muted small">${c.error ? `⚠️ ${esc(c.error)}` : c.data ? `· ${esc(c.data.name || u)} · actualizado ${agoText(c.data.updated)}` : '· cargando…'}</span></span><button class="icon-btn" data-delfr="${esc(u)}" title="Quitar">✕</button></div>`; }).join('')}
+    </div>`;
+
+  $('#fr-refresh', v).onclick = async () => { await publishPublic(true); refreshFriends(true); };
+  $('#fr-metric', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; FRS.metric = b.dataset.m; RENDER.friends(); };
+  $('#fr-name', v).onchange = e => { so.name = e.target.value.trim().slice(0, 24); touchSocial(); publishPublic(true).then(() => activeTab === 'friends' && RENDER.friends()); };
+  $('#fr-publish', v).onchange = async e => {
+    if (e.target.checked) { so.publish = true; touchSocial(); toast('Publicando…'); await publishPublic(true); toast(FRS.pubError ? `⚠️ ${FRS.pubError}` : '📤 Estadísticas publicadas'); }
+    else { if (!confirm('¿Dejar de publicar? Se borrará tu Gist público de estadísticas y tus amigos dejarán de verte.')) { e.target.checked = true; return; } so.publish = false; touchSocial(); await unpublish(); toast('Estadísticas retiradas'); }
+    RENDER.friends();
+  };
+  if ($('#fr-pub-now', v)) $('#fr-pub-now', v).onclick = async () => { await publishPublic(true); toast(FRS.pubError ? `⚠️ ${FRS.pubError}` : '📤 Publicado'); RENDER.friends(); };
+  $('#fr-add-btn', v).onclick = async () => {
+    const u = $('#fr-add', v).value.trim().replace(/^@/, '');
+    if (!/^[a-z\d](?:[a-z\d-]{0,38})$/i.test(u)) return toast('Escribe un usuario de GitHub válido');
+    if (u.toLowerCase() === (SY.login || '').toLowerCase()) return toast('Ese usuario eres tú 🙂');
+    if (so.friends.some(x => x.toLowerCase() === u.toLowerCase())) return toast('Ya está en tu lista');
+    so.friends.push(u); touchSocial(); delete frCache[u.toLowerCase()]; RENDER.friends(); await refreshFriends(true);
+    const c = frCache[u.toLowerCase()]; toast(c && c.data ? `👥 ${c.data.name || u} añadido/a` : `Añadido. ${c && c.error ? c.error : ''}`);
+  };
+  v.querySelectorAll('[data-delfr]').forEach(b => b.onclick = () => { if (!confirm(`¿Quitar a @${b.dataset.delfr}?`)) return; so.friends = so.friends.filter(x => x !== b.dataset.delfr); touchSocial(); RENDER.friends(); });
+  v.querySelectorAll('[data-delch]').forEach(b => b.onclick = () => { if (!confirm('¿Borrar este reto?')) return; so.challenges = so.challenges.filter(c => c.id !== b.dataset.delch); touchSocial(); publishPublic(true); RENDER.friends(); });
+  const tg = $('#ch-target', v); if (tg) tg.onclick = e => { const b = e.target.closest('button'); if (!b) return; FRS.target = +b.dataset.n; v.querySelectorAll('#ch-target button').forEach(x => x.classList.toggle('on', x === b)); };
+  const du = $('#ch-dur', v); if (du) du.onclick = e => { const b = e.target.closest('button'); if (!b) return; FRS.dur = +b.dataset.d; v.querySelectorAll('#ch-dur button').forEach(x => x.classList.toggle('on', x === b)); };
+  const cc = $('#ch-create', v); if (cc) cc.onclick = async () => {
+    await ensureLogin().catch(() => {});
+    const start = todayIso(), end = datesFrom(start, FRS.dur)[FRS.dur - 1];
+    so.challenges.push({ id: uid(), from: (SY.login || '').toLowerCase(), to: $('#ch-to', v).value, target: FRS.target, start, end, created: Date.now() });
+    touchSocial(); toast('⚔️ Reto lanzado'); await publishPublic(true); RENDER.friends();
+  };
+};
 
 async function forceUpdate() {
   toast('Buscando actualización…');
