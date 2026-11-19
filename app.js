@@ -10,12 +10,13 @@ const LABELS = { new: 'Nueva', difficult: 'Difícil', learned: 'Aprendida' };
 const ORDER = { difficult: 0, new: 1, learned: 2 };
 const STATUS_COLORS = { new: '#7c8cff', difficult: '#ff9a4d', learned: '#22c58b' };
 const IV = { NEW: 1, DIFF_WRONG: 2, DIFF_RIGHT: 3, LEARNED_BASE: 10, GROWTH: 1.5, MAX: 40 };
-const STREAK_TO_LEARN = 3;
+const STREAK_TO_LEARN = 3;      // aciertos seguidos para pasar a «Aprendida» (desde nueva o difícil)
+const MISSES_TO_DIFF = 2;       // fallos seguidos para pasar a «Difícil»
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-27';
+const APP_VERSION = '2026-11-28';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -190,7 +191,7 @@ function cardDefaults(c) {
   if (c && c.topic) c.topic = stripDay(c.topic);
   return Object.assign({
     id: uid(), alt: [], note: '', topic: '', status: NEW, created: todayIso(), last_practiced: null,
-    next_session: 0, interval: IV.NEW, streak: 0, history: [], source: 'seed', updated: 0,
+    next_session: 0, interval: IV.NEW, streak: 0, misses: 0, history: [], source: 'seed', updated: 0,
   }, c);
 }
 function normalizeState(raw) {
@@ -259,7 +260,7 @@ function addCard({ es, fr, note = '', topic = '', alt = [], source = 'manual' })
 function deleteCard(id) { state.cards = state.cards.filter(c => c.id !== id); state.deleted[id] = Date.now(); save(); }
 function setStatus(id, status) {
   const c = getCard(id); if (!c) return;
-  c.status = status;
+  c.status = status; c.misses = 0;
   if (status === DIFF) { c.interval = IV.DIFF_WRONG; c.streak = 0; }
   else if (status === LEARNED) c.interval = Math.max(c.interval || 0, IV.LEARNED_BASE);
   else { c.interval = IV.NEW; c.streak = 0; }
@@ -296,14 +297,14 @@ function recordAnswer(id, result) {
   if (almost) {               // keeps status and streak, but comes back soon to fix the detail
     c.interval = c.status === DIFF ? IV.DIFF_WRONG : IV.NEW;
   } else if (correct) {
-    c.streak += 1;
-    if (c.status === DIFF) c.interval = IV.DIFF_RIGHT;
+    c.streak += 1; c.misses = 0;
+    if (c.status !== LEARNED && c.streak >= STREAK_TO_LEARN) { c.status = LEARNED; c.interval = IV.LEARNED_BASE; }
+    else if (c.status === DIFF) c.interval = IV.DIFF_RIGHT;
     else if (c.status === LEARNED) c.interval = Math.min(IV.MAX, Math.max(IV.LEARNED_BASE, Math.round(c.interval * IV.GROWTH)));
-    else if (c.streak >= STREAK_TO_LEARN) { c.status = LEARNED; c.interval = IV.LEARNED_BASE; }
     else c.interval = IV.NEW;
   } else {
-    c.streak = 0;
-    if (c.status === DIFF) c.interval = IV.DIFF_WRONG;
+    c.streak = 0; c.misses = (c.misses || 0) + 1;
+    if (c.status === DIFF || c.misses >= MISSES_TO_DIFF) { c.status = DIFF; c.interval = IV.DIFF_WRONG; }
     else { c.status = NEW; c.interval = IV.NEW; }
   }
   c.next_session = state.session_count + c.interval; touch(c); save();
@@ -611,6 +612,8 @@ function check() {
   if (correct) { P.ok++; bumpStreak(true); } else if (almost) P.almost++; else { P.ko++; bumpStreak(false); }
   Object.assign(P, { answered: true, verdict: res.verdict, lastInput: text }); saveSession();
   inp.readOnly = true; updateScore(); updateHeader();
+  const now = getCard(card.id);
+  if (now && now.status !== P.snapshot.status && now.status !== NEW) setTimeout(() => toast(now.status === LEARNED ? '🎉 ¡Pasa a aprendidas!' : now.status === DIFF ? '⚑ Pasa a difíciles: saldrá más a menudo' : ''), 400);
   const goal = state.settings.dailyGoal;
   if (before < goal && before + 1 >= goal) setTimeout(() => toast('🎯 ¡Objetivo diario cumplido!'), 900);
   const c = getCard(card.id);
@@ -748,7 +751,7 @@ function renderItems() {
         ${speakBtn(isExercise(c.es) && c.note ? c.note : c.fr)}
         <button class="icon-btn" title="Editar" data-act="edit">✏️</button>
         <button class="icon-btn" title="Nueva" data-act="new">🆕</button>
-        <button class="icon-btn" title="Difícil" data-act="difficult">⚑</button>
+        <button class="icon-btn ${c.status === DIFF ? 'flag-on' : ''}" title="${c.status === DIFF ? 'Quitar de difíciles' : 'Marcar como difícil'}" data-act="difficult">⚑</button>
         <button class="icon-btn" title="Aprendida" data-act="learned">✔</button>
         <button class="icon-btn" title="Eliminar" data-act="del">🗑</button>
       </div></div>`;
@@ -761,6 +764,8 @@ function onItemClick(e) {
   if (act === 'toggle') { L.open = L.open === id ? null : id; return renderItems(); }
   if (act === 'edit') return openEditor(id, renderItems);
   if (act === 'del') { const c = getCard(id); if (c && confirm(`¿Eliminar «${c.es}»?`)) { deleteCard(id); toast('Eliminada'); RENDER.list(); } return; }
+  const cur = getCard(id);
+  if (act === DIFF && cur && cur.status === DIFF) { setStatus(id, NEW); toast('Quitada de difíciles'); return RENDER.list(); }
   setStatus(id, act); toast(`Marcada como ${LABELS[act].toLowerCase()}`); RENDER.list();
 }
 
