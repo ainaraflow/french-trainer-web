@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-12-01';
+const APP_VERSION = '2026-12-02';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -1141,29 +1141,35 @@ RENDER.sounds = function renderSounds() {
 };
 
 // ------------------------------------------------------------------ GRAMMAR (quick reference)
-const GR = { q: '', open: null };
+const GR = { q: '', open: null, lvl: 'all' };
+const grLevels = g => (g.level || 'B2').split('-');
+const grBadge = g => { const l = grLevels(g); return `<span class="chip lvl lvl-${l.length > 1 ? 'mix' : l[0]}" style="font-size:.7rem;padding:2px 8px;vertical-align:middle">${l.join('–')}</span>`; };
 RENDER.grammar = function renderGrammar() {
   updateHeader();
   const v = $('#view-grammar'), all = window.GRAMMAR || [];
   const strip = h => h.replace(/<[^>]+>/g, ' ');
   const q = normalize(GR.q);
-  const list = all.filter(g => !q || normalize(g.title + ' ' + strip(g.html)).includes(q));
+  const list = all.filter(g => (GR.lvl === 'all' || grLevels(g).includes(GR.lvl)) && (!q || normalize(g.title + ' ' + strip(g.html)).includes(q)));
   const groups = [...new Set(list.map(g => g.group))];
   v.innerHTML = `
     <div class="card col">
       <div style="font-size:1.4rem;font-weight:800">📖 Gramática</div>
+      <div class="seg" id="gr-lvl" style="align-self:flex-start">${[['all', 'Todos'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-l="${k}" class="${GR.lvl === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <input class="search" id="gq" type="search" placeholder="Buscar: subjonctif, si, dont, futur…" value="${esc(GR.q)}">
       <div class="gram-index">${all.map(g => `<button data-g="${g.id}" class="${list.includes(g) ? '' : 'dim'}">${esc(g.title)}</button>`).join('')}</div>
     </div>
     ${groups.map(gr => `<div class="gram-group">${esc(gr)}</div>` + list.filter(g => g.group === gr).map(g => `
       <details class="card gram" id="g-${g.id}" ${GR.open === g.id || (q && list.length <= 3) ? 'open' : ''}>
-        <summary>${esc(g.title)}${g.level ? ` <span class="chip lvl lvl-${g.level}" style="font-size:.7rem;padding:2px 8px;vertical-align:middle">${g.level}</span>` : ''}</summary>
+        <summary>${esc(g.title)} ${grBadge(g)}</summary>
         <div class="gram-body">${g.html}</div>
       </details>`).join('')).join('') || '<div class="card muted">Nada coincide con la búsqueda.</div>'}`;
+  $('#gr-lvl', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; GR.lvl = b.dataset.l; RENDER.grammar(); };
   const gq = $('#gq', v);
   gq.addEventListener('input', e => { GR.q = e.target.value; const pos = e.target.selectionStart; RENDER.grammar(); const n = $('#gq'); n.focus(); n.setSelectionRange(pos, pos); });
   $('.gram-index', v).onclick = e => {
     const b = e.target.closest('button'); if (!b) return;
+    const g0 = (window.GRAMMAR || []).find(x => x.id === b.dataset.g);
+    if (g0 && GR.lvl !== 'all' && !grLevels(g0).includes(GR.lvl)) GR.lvl = 'all';
     GR.q = ''; GR.open = b.dataset.g; RENDER.grammar();
     const el = $(`#g-${b.dataset.g}`); if (el) { el.open = true; el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   };

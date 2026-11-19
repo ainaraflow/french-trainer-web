@@ -268,3 +268,4 @@ button { transition: transform .08s, filter .08s; -webkit-tap-highlight-color: r
 .lvl-B2 { background: #e3ecff; color: #2f55c4; }
 .lvl-C1 { background: #2b2350; color: #ffd76a; }
 .fsep { display: inline-block; width: 1px; height: 22px; background: #ddd; margin: 0 4px; vertical-align: middle; }
+.lvl-mix { background: linear-gradient(90deg, #d8f3dc, #e3ecff); color: #2a5a8a; }
