@@ -1,5 +1,5 @@
 // Network first (always the latest version when online), cache as offline fallback.
-const CACHE = 'ft-v14';
+const CACHE = 'ft-v15';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './data.js', './grammar.js', './sounds.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 

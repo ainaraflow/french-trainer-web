@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-29';
+const APP_VERSION = '2026-11-30';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -46,7 +46,7 @@ function topicColors(topic) { const i = crc32(topic || '-') % TOPIC_BG.length; r
 function topicChip(topic, extra = '') {
   if (!topic) return '';
   const [bg, ink] = topicColors(topic);
-  return `<span class="chip" style="background:${bg};color:${ink};${extra}">${esc(topic)}</span>`;
+  return `<span class="chip" style="background:${bg};color:${ink};${extra}">${esc(topic.replace(/^C1 · /, ''))}</span>`;
 }
 function statusChip(status, extra = '') { return `<span class="chip" style="background:${STATUS_COLORS[status]};color:#fff;${extra}">${LABELS[status]}</span>`; }
 
@@ -276,12 +276,13 @@ function sessionPool(opts, session = state.session_count + 1) {
   else if (opts.mode === 'topics') { const set = new Set(opts.topics); pool = state.cards.filter(c => set.has(c.topic)); }
   else pool = state.cards.filter(c => c.next_session <= session);
   if (opts.onlyDiff) pool = pool.filter(c => c.status === DIFF);
+  if (opts.cefr && opts.cefr !== 'all') pool = pool.filter(c => levelOf(c) === opts.cefr);
   return pool;
 }
 function startSession(opts) {
   let pool = sessionPool(opts);
   if (!pool.length && opts.mode === 'smart' && opts.reviewAnyway) {
-    pool = [...state.cards].sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.next_session - b.next_session).slice(0, opts.size);
+    pool = sessionPool({ mode: 'random', cefr: opts.cefr }).sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.next_session - b.next_session).slice(0, opts.size);
   }
   state.session_count += 1;
   shuffle(pool);
@@ -321,13 +322,13 @@ function topicGroups(cards = state.cards) {
   const counts = new Map();
   cards.forEach(c => { if (c.topic) counts.set(c.topic, (counts.get(c.topic) || 0) + 1); });
   const course = (window.DEFIS || []).map(d => stripDay(d.topic));
-  const groups = [['Temas', []], ['Módulos', []], ['Mis apuntes', []], ['Frases y banco', []]];
-  for (const [t, n] of counts) groups[course.includes(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^apuntes · /.test(t) ? 2 : 3][1].push([t, n]);
+  const groups = [['Temas', []], ['Módulos', []], ['Nivel C1', []], ['Mis apuntes', []], ['Frases y banco', []]];
+  for (const [t, n] of counts) groups[course.includes(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^C1 · /.test(t) ? 2 : /^apuntes · /.test(t) ? 3 : 4][1].push([t, n]);
   groups[0][1].sort((a, b) => course.indexOf(a[0]) - course.indexOf(b[0]));
-  groups[1][1].sort(); groups[2][1].sort(); groups[3][1].sort();
+  groups[1][1].sort(); groups[2][1].sort(); groups[3][1].sort(); groups[4][1].sort();
   return groups.filter(g => g[1].length);
 }
-const shortTopic = t => t.replace(/^(apuntes|Módulo) · /, '');
+const shortTopic = t => t.replace(/^(apuntes|Módulo|C1) · /, '');
 
 // ------------------------------------------------------------------ daily activity, streaks, goal
 function activityByDay() {
@@ -401,6 +402,7 @@ function openEditor(id, onDone) {
         <div><label class="lbl">Español (lo que ves)</label><input class="field" id="e-es" value="${esc(c.es)}"></div>
         <div><label class="lbl">Français (respuesta)</label><input class="field" id="e-fr" lang="fr" autocapitalize="off" value="${esc(c.fr)}"></div>
         <div><label class="lbl">Respuestas alternativas (separadas por ;)</label><input class="field" id="e-alt" lang="fr" autocapitalize="off" value="${esc(c.alt.join('; '))}"></div>
+        <div><label class="lbl">Nivel</label><select class="field" id="e-level">${CEFR.map(l => `<option ${levelOf(c) === l ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div><label class="lbl">Traducción literal (opcional)</label><input class="field" id="e-lit" value="${esc(litOf(c))}"></div>
         <div><label class="lbl">Nota</label><textarea class="field" id="e-note" rows="3">${esc(c.note)}</textarea></div>
         <div><label class="lbl">Tema</label><input class="field" id="e-topic" list="e-topics" value="${esc(c.topic)}">
@@ -418,13 +420,16 @@ function openEditor(id, onDone) {
   $('#e-save', m).onclick = () => {
     const es = $('#e-es', m).value.trim(), fr = $('#e-fr', m).value.trim();
     if (!es || !fr) return toast('Español y francés son obligatorios');
-    Object.assign(c, { es, fr, lit: $('#e-lit', m).value.trim(), note: $('#e-note', m).value.trim(), topic: $('#e-topic', m).value.trim(),
+    Object.assign(c, { es, fr, level: $('#e-level', m).value, lit: $('#e-lit', m).value.trim(), note: $('#e-note', m).value.trim(), topic: $('#e-topic', m).value.trim(),
       alt: $('#e-alt', m).value.split(';').map(s => s.trim()).filter(Boolean), edited: true, updated: Date.now() });
     save(); close(); toast('Tarjeta guardada'); onDone && onDone();
   };
   setTimeout(() => $('#e-fr', m).focus(), 50);
 }
 
+const CEFR = ['B2', 'C1'];
+const levelOf = c => c.level || 'B2';            // cards without a level are the original B2 deck
+const levelChip = (c, extra = '') => `<span class="chip lvl lvl-${levelOf(c)}" style="${extra}">${levelOf(c)}</span>`;
 const litOf = c => (c.lit != null ? c.lit : (window.CONTENT_LIT || {})[c.id]) || '';
 
 // ------------------------------------------------------------------ tabs
@@ -445,7 +450,7 @@ const statTile = (label, num, color) =>
 
 // ------------------------------------------------------------------ PRACTICE
 const P = Object.assign({ running: false, queue: [], idx: 0, answered: false, snapshot: null, verdict: null,
-  ok: 0, ko: 0, almost: 0, size: 20, streak: 0, best: 0, lastInput: '', mode: 'smart', topics: [], onlyDiff: false, level: 'hard' }, (() => {
+  ok: 0, ko: 0, almost: 0, size: 20, streak: 0, best: 0, lastInput: '', mode: 'smart', topics: [], onlyDiff: false, level: 'hard', cefr: 'all' }, (() => {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY)) || {}; } catch { return {}; }
 })());
 P.topics = (P.topics || []).map(stripDay);
@@ -474,7 +479,7 @@ function streakBlock() {
   </div>`;
 }
 function renderStart(v) {
-  const s = stats(), available = sessionPool({ mode: P.mode, topics: P.topics, onlyDiff: P.onlyDiff }).length;
+  const s = stats(), available = sessionPool({ mode: P.mode, topics: P.topics, onlyDiff: P.onlyDiff, cefr: P.cefr }).length;
   const modeBtn = (k, l) => `<button data-mode="${k}" class="${P.mode === k ? 'on' : ''}">${l}</button>`;
   v.innerHTML = `
     <div class="card col anim-in" style="align-items:center;text-align:center">
@@ -487,6 +492,7 @@ function renderStart(v) {
       <div class="seg" id="mode-seg">${modeBtn('smart', '🧠 Repaso')}${modeBtn('random', '🎲 Aleatorio')}${modeBtn('topics', '🏷️ Temas')}</div>
       <div class="muted small" style="margin-top:-6px">${{ smart: 'Las tarjetas que tocan hoy según tu progreso.', random: 'Tarjetas al azar de todo el mazo.', topics: 'Solo los temas que elijas (primero las que tocan hoy).' }[P.mode]}</div>
       ${P.mode === 'topics' ? topicPickerHtml() : ''}
+      <div class="seg" id="cefr-seg">${[['all', 'Todos los niveles'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-cefr="${k}" class="${(P.cefr || 'all') === k ? 'on' : ''}">${k === 'all' ? '📶 ' : ''}${l}</button>`).join('')}</div>
       <div class="seg" id="level-seg"><button data-level="easy" class="${P.level === 'easy' ? 'on' : ''}">😊 Fácil</button><button data-level="hard" class="${P.level !== 'easy' ? 'on' : ''}">💪 Difícil</button></div>
       <div class="muted small" style="margin-top:-6px">${P.level === 'easy' ? 'Verás huecos con el número de letras de cada palabra y algunas letras de pista.' : 'Sin pistas: escribes la respuesta completa.'}</div>
       <label class="check"><input type="checkbox" id="only-diff" ${P.onlyDiff ? 'checked' : ''}> Solo las difíciles</label>
@@ -499,6 +505,7 @@ function renderStart(v) {
           : `<div class="muted">${P.mode === 'topics' && !P.topics.length ? 'Elige al menos un tema.' : 'No hay tarjetas con estos filtros.'}</div>`}
     </div>`;
   $('#mode-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.mode = b.dataset.mode; saveSession(); renderStart(v); };
+  $('#cefr-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.cefr = b.dataset.cefr; saveSession(); renderStart(v); };
   $('#size-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.size = +b.dataset.size; saveSession(); renderStart(v); };
   $('#only-diff', v).onchange = e => { P.onlyDiff = e.target.checked; saveSession(); renderStart(v); };
   $('#level-seg', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; P.level = b.dataset.level; saveSession(); renderStart(v); };
@@ -527,7 +534,7 @@ function topicPickerHtml() {
   </div>`;
 }
 function start(reviewAnyway) {
-  const queue = startSession({ mode: P.mode, topics: P.topics, onlyDiff: P.onlyDiff, size: P.size, reviewAnyway });
+  const queue = startSession({ mode: P.mode, topics: P.topics, onlyDiff: P.onlyDiff, cefr: P.cefr, size: P.size, reviewAnyway });
   Object.assign(P, { queue, idx: 0, ok: 0, ko: 0, almost: 0, running: true, answered: false, snapshot: null, verdict: null, streak: 0, best: 0, lastInput: '' });
   saveSession(); RENDER.practice();
 }
@@ -557,7 +564,7 @@ function renderCard(v, card) {
     </div>
     <div class="progress"><div style="width:${(100 * (n - 1) / total).toFixed(1)}%"></div></div>
     <div class="card anim-in" style="border-top:8px solid ${bg}">
-      <div class="row between">${topicChip(card.topic) || '<span></span>'}<span id="status-chip">${statusChip(card.status)}</span></div>
+      <div class="row between"><span class="row" style="gap:6px">${levelChip(card)}${topicChip(card.topic)}</span><span id="status-chip">${statusChip(card.status)}</span></div>
       <div class="prompt">${esc(card.es)}</div>
       <div class="row between" style="margin:-2px 0 8px">
         <div class="hint ${P.level === 'easy' ? '' : 'hidden'}" id="hint">${hintHtml(card.fr, card.id + card.fr)}</div>
@@ -686,7 +693,7 @@ document.addEventListener('keydown', e => {
 });
 
 // ------------------------------------------------------------------ LIST
-const L = { q: '', status: 'all', topic: '', limit: 80, open: null };
+const L = { q: '', status: 'all', topic: '', cefr: 'all', limit: 80, open: null };
 RENDER.list = function renderList() {
   updateHeader();
   const s = stats(), v = $('#view-list');
@@ -703,6 +710,7 @@ RENDER.list = function renderList() {
       </select>
       <div class="filters" id="filters">
         ${[['all', 'Todas'], [NEW, 'Nuevas'], [DIFF, 'Difíciles'], [LEARNED, 'Aprendidas']].map(([k, l]) => `<button data-f="${k}" class="${L.status === k ? 'on' : ''}">${l}</button>`).join('')}
+        <span class="fsep"></span>${[['all', 'B2+C1'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-cefr="${k}" class="${L.cefr === k ? 'on' : ''}">${l}</button>`).join('')}
       </div>
     </div>
     <div class="muted small" id="count" style="margin:-4px 0 8px"></div>
@@ -721,7 +729,7 @@ RENDER.list = function renderList() {
     </details>`;
   $('#q', v).addEventListener('input', e => { L.q = e.target.value; L.limit = 80; renderItems(); });
   $('#topic-sel', v).onchange = e => { L.topic = e.target.value; L.limit = 80; renderItems(); };
-  $('#filters', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; L.status = b.dataset.f; L.limit = 80; RENDER.list(); };
+  $('#filters', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.cefr) L.cefr = b.dataset.cefr; else L.status = b.dataset.f; L.limit = 80; RENDER.list(); };
   $('#more', v).onclick = () => { L.limit += 80; renderItems(); };
   $('#a-add', v).onclick = () => {
     const es = $('#a-es').value.trim(), fr = $('#a-fr').value.trim();
@@ -735,7 +743,7 @@ RENDER.list = function renderList() {
 };
 function filteredCards() {
   const q = normalize(L.q);
-  return state.cards.filter(c => (L.status === 'all' || c.status === L.status) && (!L.topic || c.topic === L.topic) &&
+  return state.cards.filter(c => (L.status === 'all' || c.status === L.status) && (!L.topic || c.topic === L.topic) && (L.cefr === 'all' || levelOf(c) === L.cefr) &&
     (!q || normalize(`${c.es} ${c.fr} ${c.topic} ${(c.alt || []).join(' ')}`).includes(q)))
     .sort((a, b) => (b.last_practiced || '').localeCompare(a.last_practiced || ''));
 }
@@ -747,7 +755,7 @@ function renderItems() {
     return `<div class="item" data-id="${c.id}">
       <div class="item-main" data-act="toggle">
         <div class="es">${esc(c.es)}</div><div class="fr">${esc(c.fr)}</div>${litOf(c) ? `<div class="lit">🔤 ${esc(litOf(c))}</div>` : ''}
-        <div class="meta">${topicChip(c.topic, 'font-size:.68rem;padding:2px 8px')}${statusChip(c.status, 'font-size:.68rem;padding:2px 8px')}
+        <div class="meta">${levelChip(c, 'font-size:.68rem;padding:2px 8px')}${topicChip(c.topic, 'font-size:.68rem;padding:2px 8px')}${statusChip(c.status, 'font-size:.68rem;padding:2px 8px')}
           <span>· ${formatDate(c.last_practiced)}</span>${c.history.length ? `<span>· ${ok}/${c.history.length} aciertos</span>` : ''}${c.note ? '<span>· 💡</span>' : ''}${c.edited ? '<span>· ✏️</span>' : ''}</div>
         ${L.open === c.id ? `<div class="xnote">${c.alt.length ? `<div><b>También:</b> ${c.alt.map(esc).join(' · ')}</div>` : ''}${c.note ? `<div>💡 ${esc(c.note)}</div>` : ''}${!c.alt.length && !c.note ? '<div class="muted">Sin notas</div>' : ''}</div>` : ''}
       </div>
@@ -1149,7 +1157,7 @@ RENDER.grammar = function renderGrammar() {
     </div>
     ${groups.map(gr => `<div class="gram-group">${esc(gr)}</div>` + list.filter(g => g.group === gr).map(g => `
       <details class="card gram" id="g-${g.id}" ${GR.open === g.id || (q && list.length <= 3) ? 'open' : ''}>
-        <summary>${esc(g.title)}</summary>
+        <summary>${esc(g.title)}${g.level ? ` <span class="chip lvl lvl-${g.level}" style="font-size:.7rem;padding:2px 8px;vertical-align:middle">${g.level}</span>` : ''}</summary>
         <div class="gram-body">${g.html}</div>
       </details>`).join('')).join('') || '<div class="card muted">Nada coincide con la búsqueda.</div>'}`;
   const gq = $('#gq', v);
@@ -1218,7 +1226,7 @@ RENDER.data = function renderData() {
       <label class="btn btn-soft file-btn" style="width:fit-content">📂 Elegir archivo .json<input type="file" id="imp-json" accept=".json,application/json"></label>
       <hr class="sep">
       <div style="font-weight:800">Empezar de cero</div>
-      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, temas y módulos).</div>
+      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, temas, módulos y C1).</div>
       <div><button class="btn btn-diff" id="reset">Restablecer</button></div>
     </div>
     <div class="card col" style="margin-top:14px">
