@@ -15,7 +15,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-24';
+const APP_VERSION = '2026-11-25';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -65,7 +65,7 @@ const NOVELTY = /grandma|grandpa|grand-m|grand-p|eddy|flo\b|reed|rocko|sandy|she
 function voiceScore(v) {
   let s = 0;
   if (/natural|neural|online/i.test(v.name)) s += 6;          // Edge / Windows neural voices
-  if (/premium|enhanced|améliorée|mejorada|siri/i.test(v.name)) s += 5; // Apple downloaded voices
+  if (/premium|enhanced|améliorée|mejorada/i.test(v.name)) s += 5; // Apple downloaded voices
   if (/google/i.test(v.name)) s += 4;                          // Chrome / Android
   if (/^fr[-_]FR/i.test(v.lang)) s += 2;
   if (NOVELTY.test(v.name)) s -= 20;
@@ -78,13 +78,35 @@ function pickVoice() {
   try { if (activeTab === 'data') RENDER.data(); } catch {}   // voices load async; activeTab may not exist yet on first call
 }
 if (canSpeak) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+// iOS sometimes lists voices that cannot actually speak (silence, no error). If the chosen voice doesn't start,
+// we retry with the system default French voice and remember that voice as broken for this session.
+const badVoices = new Set(); let curUtter = null; const speechLog = [];
+const logSpeech = m => { speechLog.push(`${new Date().toLocaleTimeString()} ${m}`); if (speechLog.length > 12) speechLog.shift(); };
 function speak(text, rate = 0.92, onend) {
   if (!canSpeak || !text) return;
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text.replace(/…/g, '').replace(/____/g, ' '));
-  u.lang = frVoice ? frVoice.lang : 'fr-FR'; if (frVoice) u.voice = frVoice; u.rate = rate * (voicePref.speed || 1);
+  const synth = speechSynthesis, clean = text.replace(/…/g, '').replace(/____/g, ' ');
+  if (synth.speaking || synth.pending) synth.cancel();
+  try { synth.resume(); } catch {}
+  const make = voice => {
+    const u = new SpeechSynthesisUtterance(clean);
+    u.lang = voice ? voice.lang : 'fr-FR'; if (voice) u.voice = voice; u.rate = rate * (voicePref.speed || 1);
+    return u;
+  };
+  const voice = frVoice && !badVoices.has(frVoice.name) ? frVoice : null;
+  const u = make(voice); curUtter = u; let started = false, fell = false;
+  const fallback = why => {
+    if (fell || started || curUtter !== u || !voice) return;
+    fell = true; badVoices.add(voice.name); logSpeech(`«${voice.name}» no suena (${why}) → voz por defecto`);
+    const u2 = make(null); curUtter = u2;
+    u2.onstart = () => logSpeech('voz por defecto: empieza ✓'); u2.onerror = e => logSpeech('voz por defecto: error ' + e.error);
+    if (onend) u2.onend = onend;
+    try { synth.cancel(); } catch {} synth.speak(u2);
+  };
+  u.onstart = () => { started = true; logSpeech(`${voice ? voice.name : 'voz por defecto'}: empieza ✓`); };
+  u.onerror = e => { logSpeech(`${voice ? voice.name : 'voz por defecto'}: error ${e.error}`); if (!/interrupted|canceled/.test(e.error)) fallback(e.error); };
   if (onend) u.onend = onend;
-  speechSynthesis.speak(u);
+  synth.speak(u);
+  if (voice) setTimeout(() => { if (!started && !synth.speaking) fallback('no empieza'); }, 1500);
 }
 const speakBtn = (text, cls = 'icon-btn') => canSpeak ? `<button class="${cls}" data-speak="${esc(text)}" title="Escuchar">🔊</button>` : '';
 document.addEventListener('click', e => { const b = e.target.closest('[data-speak]'); if (b) { e.stopPropagation(); speak(b.dataset.speak); } });
@@ -1129,7 +1151,20 @@ RENDER.data = function renderData() {
             : '<div class="muted small">No hay ninguna voz francesa instalada. Mira abajo cómo añadir una.</div>'}</div>
         <div><label class="lbl">Velocidad</label>
           <div class="seg" id="speed-seg" style="margin-top:6px">${[[.8, 'Lenta'], [.9, 'Algo lenta'], [1, 'Normal'], [1.1, 'Rápida']].map(([n, l]) => `<button data-sp="${n}" class="${voicePref.speed === n ? 'on' : ''}">${l}</button>`).join('')}</div></div>
-        <div class="row"><button class="btn btn-soft" id="test-voice">🔊 Probar voz</button></div>
+        <div class="row"><button class="btn btn-soft" id="test-voice">🔊 Probar voz</button><button class="btn btn-ghost" id="test-default">🔊 Probar voz por defecto</button></div>
+        <details class="voice-help" id="voice-diag"><summary>🩺 Diagnóstico de voz</summary>
+          <div class="muted small" style="margin:8px 0">Pulsa «Probar voz» y luego abre esto. Si me mandas una captura, veo qué pasa.</div>
+          <div class="diag">${esc([
+            `Navegador: ${navigator.userAgent}`,
+            `App instalada (pantalla de inicio): ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'sí' : 'no'}`,
+            `Voz elegida: ${frVoice ? frVoice.name + ' · ' + frVoice.lang : 'ninguna (por defecto)'}`,
+            `Voces que no han sonado: ${[...badVoices].join(', ') || '—'}`,
+            `Últimos eventos:`, ...(speechLog.length ? speechLog : ['(ninguno todavía)']),
+            ``, `Todas las voces (${speechSynthesis.getVoices().length}):`,
+            ...speechSynthesis.getVoices().map(v => `${/^fr/i.test(v.lang) ? '🇫🇷 ' : ''}${v.name} · ${v.lang}${v.localService === false ? ' · online' : ''}${v.default ? ' · por defecto' : ''}`),
+          ].join('\n'))}</div>
+          <button class="btn btn-soft small" id="diag-refresh" style="margin-top:8px">↻ Actualizar</button>
+        </details>
         <details class="voice-help"><summary>¿Suena robótica? Cómo instalar una voz mejor</summary>
           <ul class="steps">
             <li><b>iPhone / iPad:</b> Ajustes → Accesibilidad → Contenido leído → Voces → Francés. Descarga una voz marcada como «mejorada» o «premium». Después cierra la app del todo, vuelve a abrirla y elígela aquí.</li>
@@ -1165,7 +1200,9 @@ RENDER.data = function renderData() {
   if ($('#auto-speak')) $('#auto-speak').onchange = e => { st.autoSpeak = e.target.checked; st.updated = Date.now(); save(); };
   bindSyncUi();
   if ($('#test-voice')) $('#test-voice').onclick = () => speak('Bonjour ! Je voudrais un croissant et un café, s’il vous plaît.');
-  if ($('#voice-sel')) $('#voice-sel').onchange = e => { voicePref.name = e.target.value; saveVoicePref(); frVoice = frVoices.find(v => v.name === voicePref.name) || frVoice; speak('Bonjour ! Comment ça va ?'); };
+  if ($('#test-default')) $('#test-default').onclick = () => { const keep = frVoice; frVoice = null; speak('Bonjour ! Ceci est la voix par défaut.'); frVoice = keep; };
+  if ($('#diag-refresh')) $('#diag-refresh').onclick = () => { RENDER.data(); const d = $('#voice-diag'); if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); } };
+  if ($('#voice-sel')) $('#voice-sel').onchange = e => { voicePref.name = e.target.value; badVoices.delete(voicePref.name); saveVoicePref(); frVoice = frVoices.find(v => v.name === voicePref.name) || frVoice; speak('Bonjour ! Comment ça va ?'); };
   if ($('#speed-seg')) $('#speed-seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; voicePref.speed = +b.dataset.sp; saveVoicePref(); RENDER.data(); speak('Bonjour ! Comment ça va ?'); };
   $('#export').onclick = exportData;
   $('#imp-json').onchange = importData;
