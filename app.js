@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-28';
+const APP_VERSION = '2026-11-29';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -401,6 +401,7 @@ function openEditor(id, onDone) {
         <div><label class="lbl">Español (lo que ves)</label><input class="field" id="e-es" value="${esc(c.es)}"></div>
         <div><label class="lbl">Français (respuesta)</label><input class="field" id="e-fr" lang="fr" autocapitalize="off" value="${esc(c.fr)}"></div>
         <div><label class="lbl">Respuestas alternativas (separadas por ;)</label><input class="field" id="e-alt" lang="fr" autocapitalize="off" value="${esc(c.alt.join('; '))}"></div>
+        <div><label class="lbl">Traducción literal (opcional)</label><input class="field" id="e-lit" value="${esc(litOf(c))}"></div>
         <div><label class="lbl">Nota</label><textarea class="field" id="e-note" rows="3">${esc(c.note)}</textarea></div>
         <div><label class="lbl">Tema</label><input class="field" id="e-topic" list="e-topics" value="${esc(c.topic)}">
           <datalist id="e-topics">${topics.map(t => `<option value="${esc(t)}">`).join('')}</datalist></div>
@@ -417,12 +418,14 @@ function openEditor(id, onDone) {
   $('#e-save', m).onclick = () => {
     const es = $('#e-es', m).value.trim(), fr = $('#e-fr', m).value.trim();
     if (!es || !fr) return toast('Español y francés son obligatorios');
-    Object.assign(c, { es, fr, note: $('#e-note', m).value.trim(), topic: $('#e-topic', m).value.trim(),
+    Object.assign(c, { es, fr, lit: $('#e-lit', m).value.trim(), note: $('#e-note', m).value.trim(), topic: $('#e-topic', m).value.trim(),
       alt: $('#e-alt', m).value.split(';').map(s => s.trim()).filter(Boolean), edited: true, updated: Date.now() });
     save(); close(); toast('Tarjeta guardada'); onDone && onDone();
   };
   setTimeout(() => $('#e-fr', m).focus(), 50);
 }
+
+const litOf = c => (c.lit != null ? c.lit : (window.CONTENT_LIT || {})[c.id]) || '';
 
 // ------------------------------------------------------------------ tabs
 let activeTab = 'practice';
@@ -644,6 +647,7 @@ function showFeedback(card, res, overridden = false, quiet = false) {
         <button class="btn btn-ghost" id="edit-card" style="padding-left:0">✏️ Editar</button>
       </div>
     </div>
+    ${litOf(card) ? `<div class="note lit-note anim-in"><span>🔤</span><span><b>Literal:</b> ${esc(litOf(card))}</span></div>` : ''}
     ${card.note ? `<div class="note anim-in"><span>💡</span><span>${esc(card.note)}</span></div>` : ''}`;
   const o = $('#override'); if (o) o.onclick = overrideCorrect;
   $('#edit-card').onclick = () => openEditor(card.id, () => showFeedback(getCard(card.id), { verdict: P.verdict }, false, true));
@@ -742,7 +746,7 @@ function renderItems() {
     const ok = c.history.filter(h => h.correct).length;
     return `<div class="item" data-id="${c.id}">
       <div class="item-main" data-act="toggle">
-        <div class="es">${esc(c.es)}</div><div class="fr">${esc(c.fr)}</div>
+        <div class="es">${esc(c.es)}</div><div class="fr">${esc(c.fr)}</div>${litOf(c) ? `<div class="lit">🔤 ${esc(litOf(c))}</div>` : ''}
         <div class="meta">${topicChip(c.topic, 'font-size:.68rem;padding:2px 8px')}${statusChip(c.status, 'font-size:.68rem;padding:2px 8px')}
           <span>· ${formatDate(c.last_practiced)}</span>${c.history.length ? `<span>· ${ok}/${c.history.length} aciertos</span>` : ''}${c.note ? '<span>· 💡</span>' : ''}${c.edited ? '<span>· ✏️</span>' : ''}</div>
         ${L.open === c.id ? `<div class="xnote">${c.alt.length ? `<div><b>También:</b> ${c.alt.map(esc).join(' · ')}</div>` : ''}${c.note ? `<div>💡 ${esc(c.note)}</div>` : ''}${!c.alt.length && !c.note ? '<div class="muted">Sin notas</div>' : ''}</div>` : ''}
