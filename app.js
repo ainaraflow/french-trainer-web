@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-11-30';
+const APP_VERSION = '2026-12-01';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -427,8 +427,8 @@ function openEditor(id, onDone) {
   setTimeout(() => $('#e-fr', m).focus(), 50);
 }
 
-const CEFR = ['B2', 'C1'];
-const levelOf = c => c.level || 'B2';            // cards without a level are the original B2 deck
+const CEFR = ['B1', 'B2', 'C1'];
+const levelOf = c => c.level || (window.CONTENT_LEVELS || {})[c.id] || 'B2';   // own level → reviewed map → B2
 const levelChip = (c, extra = '') => `<span class="chip lvl lvl-${levelOf(c)}" style="${extra}">${levelOf(c)}</span>`;
 const litOf = c => (c.lit != null ? c.lit : (window.CONTENT_LIT || {})[c.id]) || '';
 
@@ -710,7 +710,7 @@ RENDER.list = function renderList() {
       </select>
       <div class="filters" id="filters">
         ${[['all', 'Todas'], [NEW, 'Nuevas'], [DIFF, 'Difíciles'], [LEARNED, 'Aprendidas']].map(([k, l]) => `<button data-f="${k}" class="${L.status === k ? 'on' : ''}">${l}</button>`).join('')}
-        <span class="fsep"></span>${[['all', 'B2+C1'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-cefr="${k}" class="${L.cefr === k ? 'on' : ''}">${l}</button>`).join('')}
+        <span class="fsep"></span>${[['all', 'Todos'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-cefr="${k}" class="${L.cefr === k ? 'on' : ''}">${l}</button>`).join('')}
       </div>
     </div>
     <div class="muted small" id="count" style="margin:-4px 0 8px"></div>
