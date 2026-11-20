@@ -285,3 +285,16 @@ button { transition: transform .08s, filter .08s; -webkit-tap-highlight-color: r
 .ch-line { display: grid; grid-template-columns: minmax(4em, 8em) 1fr 4.5em; gap: 8px; align-items: center; font-size: .9rem; }
 .trophy-row { padding: 6px 0; border-top: 1px solid #f0eef8; }
 .trophies { font-size: 1.25rem; letter-spacing: 2px; margin-left: 6px; }
+
+/* grammar exercises */
+.gx-q { font-size: 1.25rem; font-weight: 700; line-height: 1.5; margin: 6px 0; }
+.gx-blank { display: inline-block; min-width: 3.5em; border-bottom: 3px solid #c9c2f5; color: transparent; }
+.gx-fill { padding: 0 4px; border-radius: 6px; }
+.gx-fill.ok { background: #c7f0dc; color: #0d5c3d; } .gx-fill.ko { background: #ffe7a3; color: #6b4a00; }
+.gx-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.gx-opt { border: 0; border-radius: 14px; padding: 14px 10px; background: #f2efff; color: var(--primary); font-weight: 700; font-size: 1rem; cursor: pointer; font-family: inherit; }
+.gx-opt.right { background: #d4f5e6; color: #16815a; } .gx-opt.wrong { background: #ffd9d9; color: #b3313a; } .gx-opt.dim { opacity: .5; }
+.gx-chip { border: 0; border-radius: 999px; padding: 7px 12px; background: #f2efff; color: var(--muted); font-weight: 700; cursor: pointer; font-family: inherit; }
+.gx-chip.on { background: var(--primary); color: #fff; }
+.accent-keys { display: flex; flex-wrap: wrap; gap: 6px; }
+.accent-keys button { border: 0; border-radius: 10px; min-width: 2.3em; padding: 7px; background: #f6f5fb; font-size: 1rem; cursor: pointer; font-family: inherit; }

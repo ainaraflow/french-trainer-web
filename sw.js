@@ -1,6 +1,6 @@
 // Network first (always the latest version when online), cache as offline fallback.
-const CACHE = 'ft-v18';
-const ASSETS = ['./', './index.html', './styles.css', './app.js', './data.js', './grammar.js', './sounds.js', './manifest.webmanifest',
+const CACHE = 'ft-v19';
+const ASSETS = ['./', './index.html', './styles.css', './app.js', './data.js', './grammar.js', './grammar_ex.js', './sounds.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

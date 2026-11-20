@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-12-03';
+const APP_VERSION = '2026-12-04';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -1143,20 +1143,127 @@ RENDER.sounds = function renderSounds() {
   on('#i-me', () => { if (SN.audioUrl) new Audio(SN.audioUrl).play().catch(() => {}); });
 };
 
+// ------------------------------------------------------------------ GRAMMAR EXERCISES (by topic)
+const GEX_KEY = 'ft_gram_v1';
+let gexStats = (() => { try { return JSON.parse(localStorage.getItem(GEX_KEY)) || {}; } catch { return {}; } })();
+const saveGex = () => { try { localStorage.setItem(GEX_KEY, JSON.stringify(gexStats)); } catch {} };
+const GX = { running: false, pick: [], size: 10, queue: [], idx: 0, answered: false, verdict: null, picked: null, ok: 0, almost: 0, ko: 0, wrong: [], opts: null };
+const gexOf = id => (window.GRAMMAR_EX || {})[id] || [];
+const gexPct = id => { const t = gexStats[id]; return t && t.n ? Math.round(100 * t.ok / t.n) : null; };
+function gexStart(ids, items) {
+  let pool = items || shuffle(ids.flatMap(id => gexOf(id).map((x, i) => ({ id, i }))));
+  if (!items) {                                    // spread topics: round-robin so one topic doesn't eat the session
+    const by = {}; pool.forEach(p => (by[p.id] = by[p.id] || []).push(p));
+    const lists = Object.values(by); pool = [];
+    while (lists.some(l => l.length)) lists.forEach(l => l.length && pool.push(l.shift()));
+    pool = pool.slice(0, GX.size); shuffle(pool);
+  }
+  Object.assign(GX, { running: true, queue: pool, idx: 0, answered: false, verdict: null, picked: null, ok: 0, almost: 0, ko: 0, wrong: [], opts: null });
+  GR.mode = 'ex'; RENDER.grammar(); window.scrollTo({ top: 0 });
+}
+function gexCheck(item, value) {
+  if (item.t === 'c') return value === item.o[0] ? 'ok' : 'ko';
+  const u = normalize(value);
+  if (item.a.some(a => normalize(a) === u)) return 'ok';
+  if (item.a.some(a => stripAccents(normalize(a)) === stripAccents(u))) return 'almost';
+  return 'ko';
+}
+function gexAnswer(value) {
+  const cur = GX.queue[GX.idx], item = gexOf(cur.id)[cur.i]; if (!item || GX.answered) return;
+  const v = gexCheck(item, value);
+  Object.assign(GX, { answered: true, verdict: v, picked: value });
+  if (v === 'ok') GX.ok++; else if (v === 'almost') GX.almost++; else { GX.ko++; GX.wrong.push(cur); }
+  const t = gexStats[cur.id] = gexStats[cur.id] || { n: 0, ok: 0 }; t.n++; if (v === 'ok') t.ok++; saveGex();
+  navigator.vibrate?.(v === 'ok' ? 30 : [60, 40, 60]);
+  RENDER.grammar();
+}
+function gexNext() { GX.idx++; Object.assign(GX, { answered: false, verdict: null, picked: null, opts: null }); RENDER.grammar(); }
+function gexBlank(q, fill, cls) { return esc(q).replace('____', fill != null ? `<span class="gx-fill ${cls || ''}">${esc(fill)}</span>` : '<span class="gx-blank">____</span>'); }
+function renderGex(v) {
+  const all = window.GRAMMAR || [];
+  if (!GX.running) {                               // topic picker
+    const list = all.filter(g => gexOf(g.id).length && (GR.lvl === 'all' || grLevels(g).includes(GR.lvl)));
+    const groups = [...new Set(list.map(g => g.group))];
+    const nQ = GX.pick.reduce((a, id) => a + gexOf(id).length, 0);
+    v.innerHTML = `
+      <div class="card col">
+        <div class="row between"><div style="font-size:1.4rem;font-weight:800">✏️ Ejercicios</div><button class="btn btn-ghost small" id="gx-ref">📖 Volver a las fichas</button></div>
+        <div class="seg" id="gr-lvl" style="align-self:flex-start">${[['all', 'Todos'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-l="${k}" class="${GR.lvl === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <div class="muted small">Elige uno o varios temas. El % es tu acierto histórico en cada uno.</div>
+        ${groups.map(gr => `<div class="picker-group"><div class="row between"><b>${esc(gr)}</b><button class="btn btn-ghost small" data-gxgroup="${esc(gr)}">Todos</button></div>
+          <div class="topic-chips">${list.filter(g => g.group === gr).map(g => { const p = gexPct(g.id); return `<button data-gx="${g.id}" class="gx-chip ${GX.pick.includes(g.id) ? 'on' : ''}">${esc(g.title)} <span style="opacity:.7">${gexOf(g.id).length}${p != null ? ` · ${p}%` : ''}</span></button>`; }).join('')}</div></div>`).join('')}
+        <div class="seg" id="gx-size" style="align-self:center">${[10, 20, 30].map(n => `<button data-n="${n}" class="${GX.size === n ? 'on' : ''}">${n}</button>`).join('')}</div>
+        <div class="muted small" style="text-align:center">preguntas por sesión · ${nQ} disponibles</div>
+        <button class="btn btn-grad btn-lg" id="gx-go" style="align-self:center" ${nQ ? '' : 'disabled'}>▶ Empezar</button>
+      </div>`;
+    $('#gx-ref', v).onclick = () => { GR.mode = 'ref'; RENDER.grammar(); };
+    $('#gr-lvl', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; GR.lvl = b.dataset.l; RENDER.grammar(); };
+    v.querySelectorAll('[data-gx]').forEach(b => b.onclick = () => { const id = b.dataset.gx; GX.pick = GX.pick.includes(id) ? GX.pick.filter(x => x !== id) : [...GX.pick, id]; RENDER.grammar(); });
+    v.querySelectorAll('[data-gxgroup]').forEach(b => b.onclick = () => { const ids = list.filter(g => g.group === b.dataset.gxgroup).map(g => g.id); const on = ids.every(i => GX.pick.includes(i)); GX.pick = on ? GX.pick.filter(i => !ids.includes(i)) : [...new Set([...GX.pick, ...ids])]; RENDER.grammar(); });
+    $('#gx-size', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; GX.size = +b.dataset.n; RENDER.grammar(); };
+    $('#gx-go', v).onclick = () => gexStart(GX.pick);
+    return;
+  }
+  if (GX.idx >= GX.queue.length) {                 // summary
+    const total = GX.queue.length, score = GX.ok + GX.almost / 2;
+    v.innerHTML = `<div class="card col" style="align-items:center;text-align:center">
+      <div style="font-size:2.6rem">${score / total >= .8 ? '🏆' : score / total >= .6 ? '👍' : '💪'}</div>
+      <div style="font-size:1.4rem;font-weight:800">${GX.ok} / ${total}${GX.almost ? ` <span class="muted small">(+${GX.almost} casi)</span>` : ''}</div>
+      <div class="muted">${score / total >= .8 ? '¡Muy bien!' : 'Repasa las fichas de los fallos y vuelve a intentarlo.'}</div>
+      <div class="row center">${GX.wrong.length ? `<button class="btn btn-diff" id="gx-wrong">↻ Repetir los ${GX.wrong.length} fallos</button>` : ''}<button class="btn btn-grad" id="gx-again">🔀 Otra ronda</button></div>
+      <button class="btn btn-ghost" id="gx-exit">← Elegir temas</button></div>`;
+    if ($('#gx-wrong', v)) $('#gx-wrong', v).onclick = () => gexStart(null, shuffle([...GX.wrong]));
+    $('#gx-again', v).onclick = () => gexStart(GX.pick.length ? GX.pick : [...new Set(GX.queue.map(q => q.id))]);
+    $('#gx-exit', v).onclick = () => { GX.running = false; RENDER.grammar(); };
+    return;
+  }
+  const cur = GX.queue[GX.idx], item = gexOf(cur.id)[cur.i], sec = all.find(g => g.id === cur.id) || {};
+  if (item.t === 'c' && !GX.opts) GX.opts = shuffle([...item.o]);
+  const shown = GX.answered ? (item.t === 'c' ? item.o[0] : (GX.verdict === 'ok' ? GX.picked.trim() : item.a[0])) : null;
+  const fb = !GX.answered ? '' : GX.verdict === 'ok' ? '<div class="fb fb-ok">✓ ¡Correcto!</div>'
+    : GX.verdict === 'almost' ? `<div class="fb fb-warn">≈ Casi: revisa los acentos. Era <b>${esc(item.a[0])}</b>.</div>`
+    : `<div class="fb fb-ko">✗ La respuesta correcta es <b>${esc(item.t === 'c' ? item.o[0] : item.a.join(' / '))}</b>${GX.picked && item.t === 'f' ? `<div class="small">Tu respuesta: ${esc(GX.picked)}</div>` : ''}</div>`;
+  v.innerHTML = `
+    <div class="row between" style="margin-bottom:10px"><span class="pill">Pregunta ${GX.idx + 1} de ${GX.queue.length}</span>
+      <button class="btn btn-ghost small" id="gx-quit">✕ Salir</button><span class="pill">✓ ${GX.ok} · ✗ ${GX.ko}</span></div>
+    <div class="progress"><div style="width:${Math.round(100 * GX.idx / GX.queue.length)}%"></div></div>
+    <div class="card col" style="margin-top:12px">
+      <div class="row" style="gap:6px">${grBadge(sec)}<span class="chip" style="background:#f2efff;color:var(--primary)">${esc(sec.title || '')}</span></div>
+      <div class="gx-q">${gexBlank(item.q, shown, GX.answered ? (GX.verdict === 'ok' ? 'ok' : 'ko') : '')}</div>
+      ${item.t === 'c'
+        ? `<div class="gx-opts">${GX.opts.map(o => { const cls = !GX.answered ? '' : o === item.o[0] ? 'right' : o === GX.picked ? 'wrong' : 'dim'; return `<button class="gx-opt ${cls}" data-o="${esc(o)}" ${GX.answered ? 'disabled' : ''}>${esc(o)}</button>`; }).join('')}</div>`
+        : `<div class="row"><input class="field" id="gx-in" lang="fr" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Escribe la respuesta…" style="flex:1" ${GX.answered ? `readonly value="${esc(GX.picked)}"` : ''}>${GX.answered ? '' : '<button class="btn btn-grad" id="gx-check">✓</button>'}</div>
+           ${GX.answered ? '' : `<div class="accent-keys">${['é', 'è', 'ê', 'à', 'â', 'ç', 'î', 'ô', 'û', 'ù', 'ë', 'œ'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`}`}
+      ${fb}
+      ${GX.answered ? `<div class="note"><span>💡</span><span>${esc(item.e)}</span></div><button class="btn btn-grad" id="gx-next" style="align-self:flex-end">Siguiente →</button>` : ''}
+    </div>`;
+  $('#gx-quit', v).onclick = () => { GX.running = false; RENDER.grammar(); };
+  v.querySelectorAll('.gx-opt').forEach(b => b.onclick = () => gexAnswer(b.dataset.o));
+  const inp = $('#gx-in', v);
+  if (inp && !GX.answered) {
+    inp.focus({ preventScroll: true });
+    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (inp.value.trim()) gexAnswer(inp.value); } };
+    $('#gx-check', v).onclick = () => inp.value.trim() ? gexAnswer(inp.value) : toast('Escribe una respuesta primero');
+    v.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { const s = inp.selectionStart ?? inp.value.length; inp.value = inp.value.slice(0, s) + b.dataset.k + inp.value.slice(inp.selectionEnd ?? s); inp.focus(); inp.setSelectionRange(s + 1, s + 1); });
+  }
+  const nx = $('#gx-next', v); if (nx) { nx.onclick = gexNext; nx.focus({ preventScroll: true }); }
+}
+
 // ------------------------------------------------------------------ GRAMMAR (quick reference)
-const GR = { q: '', open: null, lvl: 'all' };
+const GR = { q: '', open: null, lvl: 'all', mode: 'ref' };
 const grLevels = g => (g.level || 'B2').split('-');
 const grBadge = g => { const l = grLevels(g); return `<span class="chip lvl lvl-${l.length > 1 ? 'mix' : l[0]}" style="font-size:.7rem;padding:2px 8px;vertical-align:middle">${l.join('–')}</span>`; };
 RENDER.grammar = function renderGrammar() {
   updateHeader();
   const v = $('#view-grammar'), all = window.GRAMMAR || [];
+  if (GR.mode === 'ex') return renderGex(v);
   const strip = h => h.replace(/<[^>]+>/g, ' ');
   const q = normalize(GR.q);
   const list = all.filter(g => (GR.lvl === 'all' || grLevels(g).includes(GR.lvl)) && (!q || normalize(g.title + ' ' + strip(g.html)).includes(q)));
   const groups = [...new Set(list.map(g => g.group))];
   v.innerHTML = `
     <div class="card col">
-      <div style="font-size:1.4rem;font-weight:800">📖 Gramática</div>
+      <div class="row between"><div style="font-size:1.4rem;font-weight:800">📖 Gramática</div><button class="btn btn-grad small" id="gx-open">✏️ Ejercicios</button></div>
       <div class="seg" id="gr-lvl" style="align-self:flex-start">${[['all', 'Todos'], ...CEFR.map(l => [l, l])].map(([k, l]) => `<button data-l="${k}" class="${GR.lvl === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <input class="search" id="gq" type="search" placeholder="Buscar: subjonctif, si, dont, futur…" value="${esc(GR.q)}">
       <div class="gram-index">${all.map(g => `<button data-g="${g.id}" class="${list.includes(g) ? '' : 'dim'}">${esc(g.title)}</button>`).join('')}</div>
@@ -1165,8 +1272,11 @@ RENDER.grammar = function renderGrammar() {
       <details class="card gram" id="g-${g.id}" ${GR.open === g.id || (q && list.length <= 3) ? 'open' : ''}>
         <summary>${esc(g.title)} ${grBadge(g)}</summary>
         <div class="gram-body">${g.html}</div>
+        ${gexOf(g.id).length ? `<button class="btn btn-soft small" data-gxone="${g.id}" style="margin-top:12px">✏️ Practicar esta ficha (${gexOf(g.id).length})${gexPct(g.id) != null ? ` · ${gexPct(g.id)} %` : ''}</button>` : ''}
       </details>`).join('')).join('') || '<div class="card muted">Nada coincide con la búsqueda.</div>'}`;
   $('#gr-lvl', v).onclick = e => { const b = e.target.closest('button'); if (!b) return; GR.lvl = b.dataset.l; RENDER.grammar(); };
+  $('#gx-open', v).onclick = () => { GR.mode = 'ex'; GX.running = false; RENDER.grammar(); window.scrollTo({ top: 0 }); };
+  v.querySelectorAll('[data-gxone]').forEach(b => b.onclick = () => { GX.pick = [b.dataset.gxone]; gexStart([b.dataset.gxone]); });
   const gq = $('#gq', v);
   gq.addEventListener('input', e => { GR.q = e.target.value; const pos = e.target.selectionStart; RENDER.grammar(); const n = $('#gq'); n.focus(); n.setSelectionRange(pos, pos); });
   $('.gram-index', v).onclick = e => {
