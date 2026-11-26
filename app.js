@@ -16,13 +16,15 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-12-05';
+const APP_VERSION = '2026-12-06';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtN = n => (Math.round(n * 2) / 2).toLocaleString('es-ES');   // 10.5 → «10,5»
+const pointsOf = h => h.correct ? 1 : h.almost ? 0.5 : 0;             // «casi» (tildes) = medio punto
 const pad = n => String(n).padStart(2, '0');
 const isoOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const todayIso = () => isoOf(new Date());
@@ -296,8 +298,10 @@ function recordAnswer(id, result) {
   const correct = result === true, almost = result === 'almost';
   c.history.push(Object.assign({ date: todayIso(), session: state.session_count, correct }, almost ? { almost: true } : {}));
   c.last_practiced = todayIso();
-  if (almost) {               // keeps status and streak, but comes back soon to fix the detail
-    c.interval = c.status === DIFF ? IV.DIFF_WRONG : IV.NEW;
+  if (almost) {               // half a step towards «Aprendida», but comes back soon to fix the detail
+    c.streak += 0.5;
+    if (c.status !== LEARNED && c.streak >= STREAK_TO_LEARN) { c.status = LEARNED; c.interval = IV.LEARNED_BASE; }
+    else c.interval = c.status === DIFF ? IV.DIFF_WRONG : IV.NEW;
   } else if (correct) {
     c.streak += 1; c.misses = 0;
     if (c.status !== LEARNED && c.streak >= STREAK_TO_LEARN) { c.status = LEARNED; c.interval = IV.LEARNED_BASE; }
@@ -548,7 +552,7 @@ function renderSummary(v) {
       <div style="font-size:3rem">🏆</div>
       <div style="font-size:1.8rem;font-weight:800">${msg}</div>
       <div class="ring" style="background:conic-gradient(var(--ok) ${pct * 3.6}deg, #ece9f8 0)"><div>${pct}%</div></div>
-      <div class="stats">${statTile('Correctas', P.ok, '#1fb37a')}${P.almost ? statTile('Casi', P.almost, '#e5a00d') : ''}${statTile('Incorrectas', P.ko, '#f0506e')}${statTile('Mejor racha', P.best, '#ff9a4d')}</div>
+      <div class="stats">${statTile('Puntos', `${fmtN(P.ok + P.almost / 2)} / ${total}`, '#6d5dfc')}${statTile('Correctas', P.ok, '#1fb37a')}${P.almost ? statTile('Casi (½ punto)', P.almost, '#e5a00d') : ''}${statTile('Incorrectas', P.ko, '#f0506e')}${statTile('Mejor racha', P.best, '#ff9a4d')}</div>
       ${streakBlock()}
       <div class="row center"><button class="btn btn-grad" id="home">🏠 Volver al inicio</button><span class="kbd">Enter</span></div>
     </div>`;
@@ -612,7 +616,7 @@ function bumpStreak(correct) {
   if ([5, 10, 20, 30].includes(P.streak)) toast(`🔥 ¡${P.streak} seguidas!`);
   const s = $('#streak'); if (s) { s.textContent = `🔥 ${P.streak}`; s.classList.toggle('hidden', P.streak < 2); }
 }
-const scoreText = () => `✓ ${P.ok}${P.almost ? ` &nbsp; ≈ ${P.almost}` : ''} &nbsp; ✗ ${P.ko}`;
+const scoreText = () => `✓ ${P.ok}${P.almost ? ` &nbsp; ≈ ${P.almost}` : ''} &nbsp; ✗ ${P.ko}${P.almost ? ` &nbsp;·&nbsp; <b>${fmtN(P.ok + P.almost / 2)} pts</b>` : ''}`;
 function updateScore() { const s = $('#score'); if (s) s.innerHTML = scoreText(); }
 function check() {
   const card = currentCard(), inp = $('#answer'); if (!card || P.answered || !inp) return;
@@ -635,8 +639,8 @@ function check() {
 function showFeedback(card, res, overridden = false, quiet = false) {
   const map = {
     correct: ['fb-ok', overridden ? 'Contada como correcta' : '🎉 ¡Correcto!', 'anim-pop'],
-    accents: ['fb-warn', '🟡 ¡Casi! Solo falla una tilde', 'anim-pop'],
-    close: ['fb-warn', '🟡 ¡Casi! Hay una pequeña diferencia', 'anim-pop'],
+    accents: ['fb-warn', '🟡 ¡Casi! Solo falla una tilde · ½ punto', 'anim-pop'],
+    close: ['fb-warn', '🟡 ¡Casi! Hay una pequeña diferencia · ½ punto', 'anim-pop'],
     wrong: ['fb-ko', '😕 No es correcto', 'anim-shake'],
   };
   const [cls, title, anim] = map[res.verdict] || map.wrong;
@@ -755,7 +759,7 @@ function renderItems() {
   const list = filteredCards(), shown = list.slice(0, L.limit);
   $('#count').textContent = `${list.length} ${list.length === 1 ? 'tarjeta' : 'tarjetas'}`;
   $('#items').innerHTML = shown.length ? shown.map(c => {
-    const ok = c.history.filter(h => h.correct).length;
+    const ok = fmtN(c.history.reduce((a, h) => a + pointsOf(h), 0));
     return `<div class="item" data-id="${c.id}">
       <div class="item-main" data-act="toggle">
         <div class="es">${esc(c.es)}</div><div class="fr">${esc(c.fr)}</div>${litOf(c) ? `<div class="lit">🔤 ${esc(litOf(c))}</div>` : ''}
@@ -1174,7 +1178,7 @@ function gexAnswer(value) {
   const v = gexCheck(item, value);
   Object.assign(GX, { answered: true, verdict: v, picked: value });
   if (v === 'ok') GX.ok++; else if (v === 'almost') GX.almost++; else { GX.ko++; GX.wrong.push(cur); }
-  const t = gexStats[cur.id] = gexStats[cur.id] || { n: 0, ok: 0 }; t.n++; if (v === 'ok') t.ok++; saveGex();
+  const t = gexStats[cur.id] = gexStats[cur.id] || { n: 0, ok: 0 }; t.n++; t.ok += v === 'ok' ? 1 : v === 'almost' ? 0.5 : 0; saveGex();
   navigator.vibrate?.(v === 'ok' ? 30 : [60, 40, 60]);
   RENDER.grammar();
 }
@@ -1209,7 +1213,7 @@ function renderGex(v) {
     const total = GX.queue.length, score = GX.ok + GX.almost / 2;
     v.innerHTML = `<div class="card col" style="align-items:center;text-align:center">
       <div style="font-size:2.6rem">${score / total >= .8 ? '🏆' : score / total >= .6 ? '👍' : '💪'}</div>
-      <div style="font-size:1.4rem;font-weight:800">${GX.ok} / ${total}${GX.almost ? ` <span class="muted small">(+${GX.almost} casi)</span>` : ''}</div>
+      <div style="font-size:1.4rem;font-weight:800">${fmtN(score)} / ${total}</div>${GX.almost ? `<div class="muted small">${GX.ok} correctas + ${GX.almost} casi (½ punto cada una)</div>` : ''}
       <div class="muted">${score / total >= .8 ? '¡Muy bien!' : 'Repasa las fichas de los fallos y vuelve a intentarlo.'}</div>
       <div class="row center">${GX.wrong.length ? `<button class="btn btn-diff" id="gx-wrong">↻ Repetir los ${GX.wrong.length} fallos</button>` : ''}<button class="btn btn-grad" id="gx-again">🔀 Otra ronda</button></div>
       <button class="btn btn-ghost" id="gx-exit">← Elegir temas</button></div>`;
@@ -1222,11 +1226,11 @@ function renderGex(v) {
   if (item.t === 'c' && !GX.opts) GX.opts = shuffle([...item.o]);
   const shown = GX.answered ? (item.t === 'c' ? item.o[0] : (GX.verdict === 'ok' ? GX.picked.trim() : item.a[0])) : null;
   const fb = !GX.answered ? '' : GX.verdict === 'ok' ? '<div class="fb fb-ok">✓ ¡Correcto!</div>'
-    : GX.verdict === 'almost' ? `<div class="fb fb-warn">≈ Casi: revisa los acentos. Era <b>${esc(item.a[0])}</b>.</div>`
+    : GX.verdict === 'almost' ? `<div class="fb fb-warn">≈ Casi (½ punto): revisa los acentos. Era <b>${esc(item.a[0])}</b>.</div>`
     : `<div class="fb fb-ko">✗ La respuesta correcta es <b>${esc(item.t === 'c' ? item.o[0] : item.a.join(' / '))}</b>${GX.picked && item.t === 'f' ? `<div class="small">Tu respuesta: ${esc(GX.picked)}</div>` : ''}</div>`;
   v.innerHTML = `
     <div class="row between" style="margin-bottom:10px"><span class="pill">Pregunta ${GX.idx + 1} de ${GX.queue.length}</span>
-      <button class="btn btn-ghost small" id="gx-quit">✕ Salir</button><span class="pill">✓ ${GX.ok} · ✗ ${GX.ko}</span></div>
+      <button class="btn btn-ghost small" id="gx-quit">✕ Salir</button><span class="pill">✓ ${fmtN(GX.ok + GX.almost / 2)} · ✗ ${GX.ko}</span></div>
     <div class="progress"><div style="width:${Math.round(100 * GX.idx / GX.queue.length)}%"></div></div>
     <div class="card col" style="margin-top:12px">
       <div class="row" style="gap:6px">${grBadge(sec)}<span class="chip" style="background:#f2efff;color:var(--primary)">${esc(sec.title || '')}</span></div>
@@ -1550,7 +1554,7 @@ const FRS = { metric: 'ok', busy: false, pubError: '', target: 200, dur: 7 };
 const touchSocial = () => { state.social.updated = Date.now(); save(); };
 function dayStats() {
   const d = {};
-  state.cards.forEach(c => c.history.forEach(h => { const x = d[h.date] = d[h.date] || { n: 0, ok: 0 }; x.n++; if (h.correct) x.ok++; }));
+  state.cards.forEach(c => c.history.forEach(h => { const x = d[h.date] = d[h.date] || { n: 0, ok: 0 }; x.n++; x.ok += pointsOf(h); }));
   return d;
 }
 function streakFrom(days) {
@@ -1693,14 +1697,14 @@ RENDER.friends = function renderFriends() {
           <span class="rank-pos">${r[FRS.metric] ? medal(i) : '·'}</span>
           <span class="rank-name">${esc(r.p.name)}${r.p.me ? ' <span class="muted small">(tú)</span>' : ''}</span>
           <span class="rank-bar"><span style="width:${Math.round(100 * r[FRS.metric] / max)}%"></span></span>
-          <span class="rank-val">${r[FRS.metric]}</span>
+          <span class="rank-val">${fmtN(r[FRS.metric])}</span>
         </div>`).join('')}</div>
       ${friendsWithData.length ? '' : '<div class="muted small">Añade a alguien abajo para empezar a competir.</div>'}
     </div>
 
     <div class="card col" style="margin-top:14px">
       <div style="font-weight:800;font-size:1.1rem">📅 Hoy</div>
-      ${group.map(p => { const t = (p.days || {})[today] || { n: 0, ok: 0 }; return `<div class="row between today-row"><span><b>${esc(p.name)}</b> <span class="muted small">🔥 ${streakFrom(p.days)}</span></span><span class="muted">${t.n} respuestas · ${t.ok} ✓${t.n ? ` · ${Math.round(100 * t.ok / t.n)} %` : ''}</span></div>`; }).join('')}
+      ${group.map(p => { const t = (p.days || {})[today] || { n: 0, ok: 0 }; return `<div class="row between today-row"><span><b>${esc(p.name)}</b> <span class="muted small">🔥 ${streakFrom(p.days)}</span></span><span class="muted">${t.n} respuestas · ${fmtN(t.ok)} ✓${t.n ? ` · ${Math.round(100 * t.ok / t.n)} %` : ''}</span></div>`; }).join('')}
       ${friendsWithData.length ? `<div class="muted small">Datos de tus amigos: de su última sincronización.</div>` : ''}
     </div>
 
@@ -1708,7 +1712,7 @@ RENDER.friends = function renderFriends() {
       <div style="font-weight:800;font-size:1.1rem">⚔️ Retos</div>
       ${chs.length ? chs.map(c => {
         const s = challengeState(c, group), mine = (c.from || '').toLowerCase() === group[0].login;
-        const bar = (x, who) => x ? `<div class="ch-line"><span>${esc(x.name)}</span><span class="rank-bar"><span style="width:${Math.min(100, Math.round(100 * x.cum / c.target))}%"></span></span><span class="rank-val">${x.cum}/${c.target}</span></div>` : `<div class="muted small">${esc(who)}: sin datos todavía</div>`;
+        const bar = (x, who) => x ? `<div class="ch-line"><span>${esc(x.name)}</span><span class="rank-bar"><span style="width:${Math.min(100, Math.round(100 * x.cum / c.target))}%"></span></span><span class="rank-val">${fmtN(x.cum)}/${c.target}</span></div>` : `<div class="muted small">${esc(who)}: sin datos todavía</div>`;
         const res = !s.done ? `<span class="muted small">${s.daysLeft} ${s.daysLeft === 1 ? 'día' : 'días'} restantes</span>`
           : s.winner === 'tie' ? '<b>🤝 Empate</b>' : s.winner ? `<b>🏆 Gana ${esc((s.winner === 'a' ? s.a : s.b).name)}</b>` : '<span class="muted small">Terminado</span>';
         return `<div class="challenge ${s.done ? 'done' : ''}">
