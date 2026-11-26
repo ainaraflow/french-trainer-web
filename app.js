@@ -16,7 +16,7 @@ const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', '
 const TOPIC_BG = ['#ffd6e8', '#d9e6ff', '#d4f5e6', '#fff0c7', '#e9dcff', '#ffe0cc', '#cff4f7', '#f1f7c9', '#ffd9d9', '#dfe3ff', '#d8f3dc', '#fde2f3'];
 const TOPIC_INK = ['#b4246a', '#2f55c4', '#16815a', '#9a6b00', '#6a3fd1', '#b4531a', '#127b85', '#6a7a12', '#b3313a', '#3d48b8', '#2c7a3f', '#a3337c'];
 const DEFAULT_SETTINGS = { dailyGoal: 20, autoSpeak: false, updated: 0 };
-const APP_VERSION = '2026-12-04';
+const APP_VERSION = '2026-12-05';
 const SYNC_KEY = 'ft_sync_v1';            // token + gist id: stays on this device, never exported
 const GIST_FILE = 'french_trainer_sync.json';
 
@@ -323,13 +323,14 @@ function topicGroups(cards = state.cards) {
   const counts = new Map();
   cards.forEach(c => { if (c.topic) counts.set(c.topic, (counts.get(c.topic) || 0) + 1); });
   const course = (window.DEFIS || []).map(d => stripDay(d.topic));
-  const groups = [['Temas', []], ['Módulos', []], ['Nivel C1', []], ['Mis apuntes', []], ['Frases y banco', []]];
-  for (const [t, n] of counts) groups[course.includes(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^C1 · /.test(t) ? 2 : /^apuntes · /.test(t) ? 3 : 4][1].push([t, n]);
+  const groups = [['Temas', []], ['Módulos', []], ['Nivel C1', []], ['Mis apuntes', []], ['Frases y banco', []], ['Básico (B1–B2)', []]];
+  for (const [t, n] of counts) groups[course.includes(t) ? 0 : /^Módulo · /.test(t) ? 1 : /^C1 · /.test(t) ? 2 : /^apuntes · /.test(t) ? 3 : /^Básico · /.test(t) ? 5 : 4][1].push([t, n]);
   groups[0][1].sort((a, b) => course.indexOf(a[0]) - course.indexOf(b[0]));
   groups[1][1].sort(); groups[2][1].sort(); groups[3][1].sort(); groups[4][1].sort();
+  const basic = groups.pop(); groups.unshift(basic);   // easiest first
   return groups.filter(g => g[1].length);
 }
-const shortTopic = t => t.replace(/^(apuntes|Módulo|C1) · /, '');
+const shortTopic = t => t.replace(/^(apuntes|Módulo|C1|Básico) · /, '');
 
 // ------------------------------------------------------------------ daily activity, streaks, goal
 function activityByDay() {
@@ -1345,7 +1346,7 @@ RENDER.data = function renderData() {
       <label class="btn btn-soft file-btn" style="width:fit-content">📂 Elegir archivo .json<input type="file" id="imp-json" accept=".json,application/json"></label>
       <hr class="sep">
       <div style="font-weight:800">Empezar de cero</div>
-      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, temas, módulos y C1).</div>
+      <div class="muted small">Borra el progreso y vuelve al mazo inicial (frases de ejemplo, tus apuntes, temas, módulos, básico y C1).</div>
       <div><button class="btn btn-diff" id="reset">Restablecer</button></div>
     </div>
     <div class="card col" style="margin-top:14px">
